@@ -47,7 +47,10 @@ WAV/MP3/FLAC (up to 16 MB) directly in the briefing form, or use any audio
 asset under `/api/ai-tasks/background-audio/` (presets or uploads) as the
 background URL. Announce briefings can play on every connected satellite, on
 an explicit target list, or on **the satellite you asked from** (leave the
-target list empty and tick "Announce on the asking satellite"). By default
+target list empty and tick "Announce on the asking satellite"). Uploaded audio
+is cleaned up automatically: when a briefing is removed, or its background
+audio is cleared or swapped in the form, the no-longer-referenced file is
+deleted — unless another briefing or the AI Task core still uses it. By default
 briefings use the plain `response` path.
 
 ## Setup

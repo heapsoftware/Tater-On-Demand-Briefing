@@ -4,6 +4,10 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.4.3 — 2026-09-30
+
+- **Features** — Uploaded background audio cleans itself up: saving settings now deletes files that the previous briefing definitions referenced and the new ones no longer do (briefing removed, background music cleared, or a file swapped for a new upload). Deletion is guarded — a file stays put while any remaining briefing points at it, when AI Task core Redis data mentions it, and whenever the usage scan cannot complete.
+
 ## v0.4.2 — 2026-09-30
 
 - **Fixes** — Completes the version fix so the shop stops offering an update after install: v0.4.1 corrected the stale embedded version but set it to `0.4.0` while shipping it in a `0.4.1` manifest. The embedded version now matches the manifest (`0.4.2`) exactly, and the regression test keeps them pinned together.

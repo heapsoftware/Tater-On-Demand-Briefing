@@ -30,7 +30,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from dotenv import load_dotenv
 
@@ -663,6 +663,104 @@ def _detect_background_audio_extension(data: bytes) -> str:
     if magic[:4] == b"fLaC":
         return ".flac"
     return ""
+
+
+_UPLOADED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac"}
+
+
+def _uploaded_audio_filename(url: Any) -> str:
+    """Filename of the uploaded background audio an asset URL points at (""
+    for any other URL)."""
+    text = _text(url)
+    marker = "/api/ai-tasks/background-audio/uploads/"
+    idx = text.find(marker)
+    if idx < 0:
+        return ""
+    name = unquote(text[idx + len(marker):].split("?", 1)[0].strip("/"))
+    if (
+        not name
+        or name != Path(name).name
+        or name.startswith(".")
+        or Path(name).suffix.lower() not in _UPLOADED_AUDIO_EXTENSIONS
+    ):
+        return ""
+    return name
+
+
+def _delivery_background_filename(briefing: Dict[str, Any]) -> str:
+    delivery = briefing.get("delivery") if isinstance(briefing.get("delivery"), dict) else {}
+    background_audio = delivery.get("background_audio") if isinstance(delivery.get("background_audio"), dict) else {}
+    background = background_audio.get("background") if isinstance(background_audio.get("background"), dict) else {}
+    return _uploaded_audio_filename(_text(background.get("url") or background_audio.get("background_url")))
+
+
+def _ai_task_core_references_upload(filename: str) -> bool:
+    """Best-effort scan of Tater's Redis store for AI Task data mentioning the
+    uploaded file. Conservative: on any failure, assume it is referenced."""
+    try:
+        from helpers import redis_client
+
+        client = redis_client
+    except Exception:
+        return False
+    needle = _text(filename)
+    if client is None or not needle:
+        return False
+    try:
+        checked = 0
+        for key in client.scan_iter(match="*ai_task*", count=100):
+            checked += 1
+            if checked > 500:
+                return True  # too much to scan; keep the file
+            for reader_name, fallback in (("hgetall", "get"), ("get", None)):
+                try:
+                    values = getattr(client, reader_name)(key)
+                except Exception:
+                    values = None
+                if values is None and fallback is None:
+                    break
+                if isinstance(values, dict):
+                    if needle in " ".join(_text(v) for v in values.values() if v is not None):
+                        return True
+                elif isinstance(values, (bytes, str)):
+                    if needle in _text(values):
+                        return True
+        return False
+    except Exception as exc:
+        logger.warning("[on-demand-briefing] AI Task usage scan failed, keeping %s: %s", filename, exc)
+        return True
+
+
+def _cleanup_background_upload(filename: str, *, briefings: List[Dict[str, Any]]) -> bool:
+    """Delete an uploaded background audio file iff nothing else references it.
+
+    Refuses when any briefing definition still points at the file or the AI
+    Task core's Redis data mentions it."""
+    name = _text(filename)
+    if (
+        not name
+        or name != Path(name).name
+        or name.startswith(".")
+        or Path(name).suffix.lower() not in _UPLOADED_AUDIO_EXTENSIONS
+    ):
+        return False
+    for briefing in briefings or []:
+        if isinstance(briefing, dict) and _delivery_background_filename(briefing) == name:
+            return False
+    if _ai_task_core_references_upload(name):
+        return False
+    root = _background_audio_uploads_dir()
+    if root is None:
+        return False
+    try:
+        path = (root / name).resolve()
+        if root not in path.parents or not path.is_file():
+            return False
+        path.unlink()
+        return True
+    except Exception as exc:
+        logger.warning("[on-demand-briefing] could not remove unused upload %s: %s", name, exc)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1565,7 +1663,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.4.2"
+    version = "0.4.3"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
@@ -1750,9 +1848,29 @@ class OnDemandBriefingPlugin(ToolVerba):
                 logger.warning("[on_demand_briefing] briefing form rebuild rejected: %s", error)
                 return _drop_form_values(out)
             out["BRIEFINGS_JSON"] = json.dumps(briefings, ensure_ascii=False, indent=2)
+            self._cleanup_stale_background_uploads(base, briefings)
         except Exception:
             logger.exception("[on_demand_briefing] briefing form rebuild failed")
         return _drop_form_values(out)
+
+    def _cleanup_stale_background_uploads(
+        self,
+        previous: List[Dict[str, Any]],
+        current: List[Dict[str, Any]],
+    ) -> List[str]:
+        """After a settings save, delete uploaded background audio files that
+        the previous definitions referenced and the new ones no longer do
+        (covering briefing removal, clear-URL saves, and uploads swapped for a
+        new file). Deletion only happens when no remaining briefing or AI Task
+        data references the file."""
+        removed: List[str] = []
+        old_names = {name for name in (_delivery_background_filename(item) for item in previous or []) if name}
+        new_names = {name for name in (_delivery_background_filename(item) for item in current or []) if name}
+        for name in sorted(old_names - new_names):
+            if _cleanup_background_upload(name, briefings=current or []):
+                removed.append(name)
+                logger.info("[on-demand-briefing] removed unused background upload: %s", name)
+        return removed
 
     # ---------------- window + identity ----------------
 
