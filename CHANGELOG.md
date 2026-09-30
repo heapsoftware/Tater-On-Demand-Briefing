@@ -4,6 +4,10 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.4.1 — 2026-09-30
+
+- **Fixes** — The installed verba now reports its matching version (`0.4.x`) to Tater: the plugin class carried a stale hardcoded `version = "0.2.1"` attribute from v0.3.0 onward, so updating appeared to succeed but the shop UI kept showing 0.2.1 with an update button. A dev regression test now pins the class version to the manifest version.
+
 ## v0.4.0 — 2026-09-30
 
 - **Features** — Announce briefings can play on **the satellite you asked from**: with announce delivery and an empty target list, a new "Announce on the asking satellite" checkbox resolves the requesting Tater satellite from the trusted portal origin (explicit targets still take precedence; unchanged "all satellites" behavior otherwise).

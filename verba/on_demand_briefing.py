@@ -1565,7 +1565,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.2.1"
+    version = "0.4.0"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
