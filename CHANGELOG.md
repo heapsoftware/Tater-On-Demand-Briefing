@@ -4,6 +4,11 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.2.1 — 2026-09-30
+
+- **Fixes** — The briefing form editor no longer drops a JSON-authored `background_audio` scene when a briefing is saved, and background audio is settable directly in the UI (URL, loop, volume) for announce-delivery briefings. Also documented the correct nested `background_audio.background` shape (the previously documented flat `url` shape never produced audio).
+- **Docs** — README now reflects the form-based briefing editor everywhere and lists weather options among the form fields.
+
 ## v0.2.0 — 2026-09-30
 
 - **Features** — Briefing definitions are now editable from the web UI with per-briefing form fields (enabled, trigger phrases, sections, time window, prompt, style, delivery, news, weather and camera options) plus an "Add a briefing" group — no JSON required. Briefings can also be removed or disabled with checkboxes.

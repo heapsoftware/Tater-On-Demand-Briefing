@@ -765,6 +765,29 @@ def _briefing_group_fields(item: Dict[str, Any], prefix: str, *, include_remove:
                 show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
                 description='Satellite targets like "voice_core:kitchen". Empty announces on every connected satellite.',
             ),
+            _field(
+                f"{prefix}BACKGROUND_URL",
+                label="Background audio URL",
+                type="text",
+                value=_text(((delivery.get("background_audio") or {}).get("background") or {}).get("url") or (delivery.get("background_audio") or {}).get("background_url")) if isinstance(delivery.get("background_audio"), dict) else "",
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+                placeholder="/api/ai-tasks/background-audio/presets/news.wav",
+                description="Looping audio ducked under the announcement TTS. Any asset under /api/ai-tasks/background-audio/. Empty means no background audio. Cleared on save when left empty.",
+            ),
+            _field(
+                f"{prefix}BACKGROUND_LOOP",
+                label="Loop background audio",
+                type="checkbox",
+                value=_to_bool((((delivery.get("background_audio") or {}).get("background") or {}).get("loop")), True),
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+            ),
+            _field(
+                f"{prefix}BACKGROUND_VOLUME",
+                label="Background volume (percent)",
+                type="number",
+                value=int(_to_int(((delivery.get("background_audio") or {}).get("background") or {}).get("volume_percent"), 60, 0, 100)),
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+            ),
         ]
     )
     return group
@@ -863,11 +886,27 @@ def _apply_briefing_form(item: Dict[str, Any], values: Dict[str, Any], prefix: s
 
     mode = _text(val("DELIVERY")).lower()
     if mode in {"response", "announce"}:
-        delivery = {"mode": mode}
+        delivery = dict(item.get("delivery") or {}) if isinstance(item.get("delivery"), dict) else {}
+        delivery["mode"] = mode
         if mode == "announce":
             targets = _split_list(val("TARGETS"))
             if targets:
                 delivery["targets"] = targets
+            if f"{prefix}BACKGROUND_URL" in values:
+                background_url = _text(val("BACKGROUND_URL"))
+                existing = delivery.get("background_audio") if isinstance(delivery.get("background_audio"), dict) else {}
+                if background_url:
+                    background = dict(existing.get("background") or {})
+                    background["url"] = background_url
+                    if f"{prefix}BACKGROUND_LOOP" in values:
+                        background["loop"] = _to_bool(val("BACKGROUND_LOOP"), _to_bool(background.get("loop"), True))
+                    if f"{prefix}BACKGROUND_VOLUME" in values:
+                        background["volume_percent"] = _to_int(
+                            val("BACKGROUND_VOLUME"), _to_int(background.get("volume_percent"), 60, 0, 100), 0, 100
+                        )
+                    delivery["background_audio"] = {**existing, "background": background}
+                else:
+                    delivery.pop("background_audio", None)
         out["delivery"] = delivery
     return out
 
@@ -1329,7 +1368,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.2.0"
+    version = "0.2.1"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 

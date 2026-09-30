@@ -81,8 +81,9 @@ background URL. By default briefings use the plain `response` path.
    - **Default TTS Style** — brief or detailed.
    - **Briefing Definitions** — in the web UI, each briefing gets its own group
      of form fields (enabled, trigger phrases, sections, time window, prompt,
-     style, delivery, news and camera options) plus an **Add a briefing**
-     group — no JSON needed (see below).
+     style, delivery with announce targets and background audio, news, weather
+     and camera options) plus an **Add a briefing** group — no JSON needed
+     (see below).
 
 4. **Try it**: "Hey Tater, give me my morning briefing."
 
@@ -96,10 +97,11 @@ created briefings get their own group the next time you open settings.
 
 ### Advanced: raw JSON definitions
 
-Briefings are stored as a JSON array (`BRIEFINGS_JSON`); you can also write
-that array directly if you need options the form does not expose (for
-example, background audio on announce delivery). Example — a news
-briefing with background audio:
+Everything the form covers (including announce targets and background audio)
+is settable in the UI, so raw JSON is rarely needed. Briefings are stored as
+a JSON array (`BRIEFINGS_JSON`); the raw field only appears in settings if
+the form editor is unavailable. For reference, this is a news briefing with
+background audio:
 
 ```json
 [
@@ -124,9 +126,11 @@ briefing with background audio:
     "delivery": {
       "mode": "announce",
       "background_audio": {
-        "url": "/api/ai-tasks/background-audio/presets/news.wav",
-        "loop": true,
-        "volume_percent": 60
+        "background": {
+          "url": "/api/ai-tasks/background-audio/presets/news.wav",
+          "loop": true,
+          "volume_percent": 60
+        }
       }
     }
   }
@@ -148,7 +152,7 @@ Field reference per briefing:
 | `empty_message` | What to say when nothing happened. |
 | `identity` | Presence device for `last_away_period` (blank = default). |
 | `section_options` | Per-section options (`news.topic/max_items/max_sentences`, `weather.location/units/include_forecast`, `camera_activity.cameras/detection_types/max_events`). |
-| `delivery` | `{"mode": "response"}` (default) or `{"mode": "announce", "targets": [...], "background_audio": {...}}`. |
+| `delivery` | `{"mode": "response"}` (default) or `{"mode": "announce", "targets": [...], "background_audio": {"background": {"url": "...", "loop": true, "volume_percent": 60}}}`. |
 
 ## Notes on behavior
 
