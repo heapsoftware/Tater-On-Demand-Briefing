@@ -11,7 +11,7 @@
       "notifier": false,
       "settings_category": "On Demand Briefing",
       "tags": ["briefing", "weather", "news", "presence", "unifi protect"],
-      "entry": "on_demand_briefing.py",
+      "entry": "verba/on_demand_briefing.py",
       "sha256": "47c85bd153e17f07b5f43e04e17d0e4ef463a5de9392bd4890bcca59216d258e"
     }
   ]
