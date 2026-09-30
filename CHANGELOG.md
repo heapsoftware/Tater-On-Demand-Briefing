@@ -4,6 +4,11 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.2.0 — 2026-09-30
+
+- **Features** — Briefing definitions are now editable from the web UI with per-briefing form fields (enabled, trigger phrases, sections, time window, prompt, style, delivery, news, weather and camera options) plus an "Add a briefing" group — no JSON required. Briefings can also be removed or disabled with checkboxes.
+- **Changes** — Custom briefings are stored under `verba/on_demand_briefing.py` in the repository (no functional change to installed verbas); an explicitly empty briefing list now means "no briefings" instead of falling back to the built-ins.
+
 ## v0.1.0 — 2026-09-30
 
 Initial release.

@@ -79,14 +79,26 @@ background URL. By default briefings use the plain `response` path.
    - **Default Camera Detection Types** — person / vehicle / package / animal
      (motion available but noise-filtered by default).
    - **Default TTS Style** — brief or detailed.
-   - **Briefing Definitions (JSON)** — leave empty to use the two built-ins, or
-     paste a JSON array of briefing definitions (see below).
+   - **Briefing Definitions** — in the web UI, each briefing gets its own group
+     of form fields (enabled, trigger phrases, sections, time window, prompt,
+     style, delivery, news and camera options) plus an **Add a briefing**
+     group — no JSON needed (see below).
 
 4. **Try it**: "Hey Tater, give me my morning briefing."
 
 ## Adding your own briefing
 
-Paste a JSON array into **Briefing Definitions (JSON)**. Example — a news
+Open **Verba → On Demand Briefing → Settings** in the web UI. Every briefing
+has its own editable group: change the fields, tick **Remove this briefing**
+to delete it, and fill in the **Add a briefing** group (name plus sections
+and options) to create a new one. Settings save on **Save settings**; newly
+created briefings get their own group the next time you open settings.
+
+### Advanced: raw JSON definitions
+
+Briefings are stored as a JSON array (`BRIEFINGS_JSON`); you can also write
+that array directly if you need options the form does not expose (for
+example, background audio on announce delivery). Example — a news
 briefing with background audio:
 
 ```json

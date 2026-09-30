@@ -499,6 +499,398 @@ def normalize_audio_scene(raw: Any) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Web UI briefing form (settings-field hook helpers)
+# ---------------------------------------------------------------------------
+
+SECTION_IDS = ["time", "weather", "news", "presence", "camera_activity"]
+
+WINDOW_STRATEGIES = [
+    {"value": "since_time", "label": "Since a time"},
+    {"value": "last_away_period", "label": "Last away period"},
+    {"value": "last_n_hours", "label": "Last N hours"},
+]
+
+DELIVERY_MODES = [
+    {"value": "response", "label": "Reply in conversation"},
+    {"value": "announce", "label": "Announce on satellites"},
+]
+
+NEW_BRIEF_TOKEN = "NEW"
+BRIEF_FORM_PREFIX = "BRIEF_"
+
+
+def _form_prefix(id_token: str) -> str:
+    return f"{BRIEF_FORM_PREFIX}{id_token}__"
+
+
+def _split_list(raw: Any) -> List[str]:
+    if isinstance(raw, list):
+        return [_text(v) for v in raw if _text(v)]
+    raw = _text(raw)
+    if raw.startswith("[") and raw.endswith("]"):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [_text(v) for v in parsed if _text(v)]
+        except Exception:
+            pass
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _field(key: str, **meta: Any) -> Dict[str, Any]:
+    return {"key": key, **meta}
+
+
+def briefing_form_fields(briefings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build web UI settings fields: one editable group per briefing plus an
+    "Add a briefing" group. Rendered by Tater's generic ManifestField form
+    (supports section headers, show_when conditions, multiselect, etc.)."""
+    fields: List[Dict[str, Any]] = []
+    for item in briefings:
+        fields.extend(_briefing_group_fields(item, _form_prefix(item["id"]), include_remove=True))
+    fields.extend(_briefing_group_fields({}, _form_prefix(NEW_BRIEF_TOKEN), include_remove=False))
+    return fields
+
+
+def _briefing_group_fields(item: Dict[str, Any], prefix: str, *, include_remove: bool) -> List[Dict[str, Any]]:
+    is_new = prefix == _form_prefix(NEW_BRIEF_TOKEN)
+    enabled = _to_bool(item.get("enabled"), True) if not is_new else True
+    tw = item.get("time_window") if isinstance(item.get("time_window"), dict) else {}
+    delivery = item.get("delivery") if isinstance(item.get("delivery"), dict) else {}
+    cam = (item.get("section_options") or {}).get("camera_activity") if isinstance(item.get("section_options"), dict) else {}
+    cam = cam if isinstance(cam, dict) else {}
+    news = (item.get("section_options") or {}).get("news") if isinstance(item.get("section_options"), dict) else {}
+    news = news if isinstance(news, dict) else {}
+    weather = (item.get("section_options") or {}).get("weather") if isinstance(item.get("section_options"), dict) else {}
+    weather = weather if isinstance(weather, dict) else {}
+    sections = [s for s in (item.get("sections") or []) if isinstance(s, str)]
+    window = _text(tw.get("strategy")) or ("since_time" if not is_new else "since_time")
+    mode = _text(delivery.get("mode")).lower() or "response"
+    title = str(item.get("name") or "").strip() or ("New briefing" if is_new else "?")
+
+    if is_new:
+        header = _field(
+            f"{prefix}HDR",
+            type="section",
+            label="Add a briefing",
+            description="Give it a name to create a new briefing when settings are saved. "
+            "Leave the name empty to skip. Saved briefings get their own group the next time you open settings.",
+        )
+    else:
+        header = _field(
+            f"{prefix}HDR",
+            type="section",
+            label=f"Briefing: {title}",
+            description=f"Id: {item.get('id')}. Uncheck Enabled to keep it configured but inactive.",
+        )
+
+    group = [header]
+    if include_remove:
+        group.append(
+            _field(
+                f"{prefix}REMOVE",
+                label="Remove this briefing",
+                type="checkbox",
+                value=False,
+                description="Deleting every briefing resets On Demand Briefing to its built-in Morning and Welcome Home briefings.",
+            )
+        )
+        group.append(
+            _field(
+                f"{prefix}ENABLED",
+                label="Enabled",
+                type="checkbox",
+                value=enabled,
+                description="Disabled briefings are kept but never matched by voice requests.",
+            )
+        )
+    group.extend(
+        [
+            _field(
+                f"{prefix}NAME",
+                label="Name",
+                type="text",
+                value=item.get("name") or "",
+                placeholder="Evening Headlines" if is_new else "",
+                description="Spoken name; also used as a trigger phrase.",
+            ),
+            _field(
+                f"{prefix}PHRASES",
+                label="Trigger phrases (comma-separated)",
+                type="text",
+                value=", ".join(_split_list(item.get("trigger_phrases"))),
+                placeholder="evening news, daily recap",
+            ),
+            _field(
+                f"{prefix}SECTIONS",
+                label="Sections (order matters)",
+                type="multiselect",
+                options=SECTION_IDS,
+                value=sections if not is_new else [],
+                description="Sections run in checkbox order: time, weather, news, presence, camera_activity.",
+            ),
+            _field(
+                f"{prefix}WINDOW",
+                label="Time window",
+                type="select",
+                options=WINDOW_STRATEGIES,
+                value=window,
+                description='"Last away period" uses presence history (presence section covers the away window).',
+            ),
+            _field(
+                f"{prefix}START",
+                label="Window start (HH:MM)",
+                type="text",
+                value=_text(tw.get("start_time")) or "22:00",
+                show_when={"key": f"{prefix}WINDOW", "values": ["since_time"]},
+            ),
+            _field(
+                f"{prefix}END",
+                label='Window end ("now" or HH:MM)',
+                type="text",
+                value=_text(tw.get("end_time")) or "now",
+                show_when={"key": f"{prefix}WINDOW", "values": ["since_time"]},
+            ),
+            _field(
+                f"{prefix}HOURS",
+                label="Window hours",
+                type="number",
+                value=int(_to_int(tw.get("hours"), 4, 1, 720)),
+                show_when={"key": f"{prefix}WINDOW", "values": ["last_n_hours"]},
+            ),
+            _field(
+                f"{prefix}PROMPT",
+                label="Writing prompt",
+                type="textarea",
+                rows=4,
+                value=_text(item.get("prompt")) if not is_new else "",
+                placeholder="Summarize the sections for the user, then add one personal tip.",
+            ),
+            _field(
+                f"{prefix}STYLE",
+                label="TTS style",
+                type="select",
+                options=["brief", "detailed"],
+                value=_text(item.get("style")).lower() or "brief",
+            ),
+            _field(
+                f"{prefix}EMPTY",
+                label="Empty-briefing message",
+                type="text",
+                value=_text(item.get("empty_message")),
+                placeholder="Spoken when a section has nothing to report",
+            ),
+            _field(
+                f"{prefix}IDENTITY",
+                label="Presence identity",
+                type="text",
+                value=_text(item.get("identity")),
+                description="Tracked device id or name used to resolve the away window. Empty uses the person asking.",
+            ),
+            _field(
+                f"{prefix}WEATHER_LOCATION",
+                label="Weather location",
+                type="text",
+                value=_text(weather.get("location")),
+                placeholder="City, Region",
+                description="Used when the section list includes weather. Empty uses the default location setting.",
+            ),
+            _field(
+                f"{prefix}WEATHER_UNITS",
+                label="Weather units",
+                type="select",
+                options=["default", "us", "metric"],
+                value=_text(weather.get("units")).lower() or "default",
+                description="Empty (default) uses the default units setting.",
+            ),
+            _field(
+                f"{prefix}WEATHER_FORECAST",
+                label="Include next-day forecast",
+                type="checkbox",
+                value=_to_bool(weather.get("include_forecast"), False),
+            ),
+            _field(
+                f"{prefix}NEWS_TOPIC",
+                label="News topic",
+                type="text",
+                value=_text(news.get("topic") or news.get("query")),
+                placeholder="technology",
+                description="Used when the section list includes news. Search appends \" news\" unless the topic already contains it.",
+            ),
+            _field(
+                f"{prefix}NEWS_MAX_ITEMS",
+                label="News max headlines",
+                type="number",
+                value=int(_to_int(news.get("max_items"), 5, 1, 10)),
+            ),
+            _field(
+                f"{prefix}NEWS_SENTENCES",
+                label="News sentences per headline",
+                type="number",
+                value=int(_to_int(news.get("max_sentences"), 2, 1, 5)),
+            ),
+            _field(
+                f"{prefix}CAMERAS",
+                label="Camera filter (comma-separated)",
+                type="text",
+                value=", ".join(_split_list(cam.get("cameras"))),
+                description="Only these UniFi Protect camera names are included. Empty means all cameras.",
+            ),
+            _field(
+                f"{prefix}DETECTIONS",
+                label="Camera detection types",
+                type="multiselect",
+                options=["person", "vehicle", "package", "animal", "motion"],
+                value=_split_list(cam.get("detection_types")) or (DEFAULT_DETECTION_TYPES if not is_new else []),
+            ),
+            _field(
+                f"{prefix}MAX_EVENTS",
+                label="Max camera events",
+                type="number",
+                value=int(_to_int(cam.get("max_events"), 20, 1, 200)),
+            ),
+            _field(
+                f"{prefix}DELIVERY",
+                label="Delivery",
+                type="select",
+                options=DELIVERY_MODES,
+                value=mode,
+                description='"Announce" sends the finished briefing to Tater satellites.',
+            ),
+            _field(
+                f"{prefix}TARGETS",
+                label="Announce targets (comma-separated)",
+                type="text",
+                value=", ".join(_split_list(delivery.get("targets"))),
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+                description='Satellite targets like "voice_core:kitchen". Empty announces on every connected satellite.',
+            ),
+        ]
+    )
+    return group
+
+
+def _apply_briefing_form(item: Dict[str, Any], values: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+    """Overlay editable form values onto an existing briefing definition,
+    preserving keys the form does not expose."""
+    out = dict(item)
+    tw = dict(item.get("time_window") if isinstance(item.get("time_window"), dict) else {})
+
+    def val(suffix: str) -> Any:
+        return values.get(f"{prefix}{suffix}")
+
+    name = _text(val("NAME"))
+    if name:
+        out["name"] = name
+    if f"{prefix}ENABLED" in values:
+        out["enabled"] = _to_bool(val("ENABLED"), _to_bool(out.get("enabled"), True))
+
+    phrases = _split_list(val("PHRASES"))
+    if phrases:
+        out["trigger_phrases"] = phrases
+
+    sections = _split_list(val("SECTIONS"))
+    if sections:
+        out["sections"] = [s for s in SECTION_IDS if s in sections] + [s for s in sections if s not in SECTION_IDS]
+
+    strategy = _text(val("WINDOW"))
+    if strategy in {s["value"] for s in WINDOW_STRATEGIES}:
+        if strategy == "since_time":
+            tw = {
+                "strategy": strategy,
+                "start_time": _text(val("START")) or _text(tw.get("start_time")) or "22:00",
+                "end_time": _text(val("END")) or "now",
+            }
+        elif strategy == "last_n_hours":
+            tw = {"strategy": strategy, "hours": _to_int(val("HOURS"), _to_int(tw.get("hours"), 4, 1, 720), 1, 720)}
+        else:
+            tw = {"strategy": strategy}
+        out["time_window"] = tw
+
+    if val("PROMPT") is not None:
+        out["prompt"] = _text(val("PROMPT"))
+    style = _text(val("STYLE")).lower()
+    if style in {"brief", "detailed"}:
+        out["style"] = style
+    if val("EMPTY") is not None:
+        out["empty_message"] = _text(val("EMPTY"))
+    if val("IDENTITY") is not None:
+        out["identity"] = _text(val("IDENTITY"))
+
+    cameras = _split_list(val("CAMERAS"))
+    detections = _split_list(val("DETECTIONS"))
+    news_topic = _text(val("NEWS_TOPIC"))
+    weather_location = _text(val("WEATHER_LOCATION"))
+    weather_units = _text(val("WEATHER_UNITS"))
+    if (
+        cameras
+        or detections
+        or news_topic
+        or weather_location
+        or f"{prefix}MAX_EVENTS" in values
+        or f"{prefix}NEWS_MAX_ITEMS" in values
+        or f"{prefix}WEATHER_FORECAST" in values
+    ):
+        section_options = dict(out.get("section_options") or {})
+        if cameras or detections or f"{prefix}MAX_EVENTS" in values:
+            options = dict(section_options.get("camera_activity") or {})
+            if cameras:
+                options["cameras"] = cameras
+            if detections:
+                options["detection_types"] = detections
+            if f"{prefix}MAX_EVENTS" in values:
+                options["max_events"] = _to_int(val("MAX_EVENTS"), int(options.get("max_events") or 20), 1, 200)
+            section_options["camera_activity"] = options
+        if news_topic or f"{prefix}NEWS_MAX_ITEMS" in values or f"{prefix}NEWS_SENTENCES" in values:
+            news = dict(section_options.get("news") or {})
+            if news_topic:
+                news["topic"] = news_topic
+            if f"{prefix}NEWS_MAX_ITEMS" in values:
+                news["max_items"] = _to_int(val("NEWS_MAX_ITEMS"), int(news.get("max_items") or 5), 1, 10)
+            if f"{prefix}NEWS_SENTENCES" in values:
+                news["max_sentences"] = _to_int(val("NEWS_SENTENCES"), int(news.get("max_sentences") or 2), 1, 5)
+            section_options["news"] = news
+        if weather_location or weather_units or f"{prefix}WEATHER_FORECAST" in values:
+            weather_opts = dict(section_options.get("weather") or {})
+            if weather_location:
+                weather_opts["location"] = weather_location
+            if weather_units in {"us", "metric"}:
+                weather_opts["units"] = weather_units
+            if f"{prefix}WEATHER_FORECAST" in values:
+                weather_opts["include_forecast"] = _to_bool(val("WEATHER_FORECAST"))
+            section_options["weather"] = weather_opts
+        out["section_options"] = section_options
+
+    mode = _text(val("DELIVERY")).lower()
+    if mode in {"response", "announce"}:
+        delivery = {"mode": mode}
+        if mode == "announce":
+            targets = _split_list(val("TARGETS"))
+            if targets:
+                delivery["targets"] = targets
+        out["delivery"] = delivery
+    return out
+
+
+def _new_briefing_from_form(values: Dict[str, Any], existing_ids: List[str]) -> Dict[str, Any]:
+    prefix = _form_prefix(NEW_BRIEF_TOKEN)
+    name = _text(values.get(f"{prefix}NAME"))
+    briefing_id = name.lower().replace(" ", "_")
+    candidate, counter = briefing_id, 2
+    while candidate in existing_ids:
+        candidate = f"{briefing_id}_{counter}"
+        counter += 1
+    sections = _split_list(values.get(f"{prefix}SECTIONS"))
+    item = _apply_briefing_form({"id": candidate, "name": name}, values, prefix)
+    item.setdefault("sections", ["time"])
+    return item
+
+
+def _drop_form_values(values: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in values.items() if not k.startswith(f"{BRIEF_FORM_PREFIX}")}
+
+
+# ---------------------------------------------------------------------------
 # Section providers
 # ---------------------------------------------------------------------------
 
@@ -937,7 +1329,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.1.0"
+    version = "0.2.0"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
@@ -1035,10 +1427,10 @@ class OnDemandBriefingPlugin(ToolVerba):
             "description": "Length and tone used when a briefing does not set its own style.",
         },
         "BRIEFINGS_JSON": {
-            "label": "Briefing Definitions (JSON)",
+            "label": "Briefing Definitions (advanced JSON)",
             "type": "text",
             "default": "",
-            "description": "JSON array of briefing definitions. Leave empty to use the built-in Morning and Welcome Home briefings. Each briefing supports: id, name, enabled, trigger_phrases, sections, time_window, prompt, style, empty_message, identity, section_options, delivery.",
+            "description": "Advanced raw JSON for briefing definitions (only shown if the per-briefing form editor is unavailable). Leave empty to use the built-in Morning and Welcome Home briefings. Each briefing supports: id, name, enabled, trigger_phrases, sections, time_window, prompt, style, empty_message, identity, section_options, delivery.",
         },
     }
 
@@ -1062,13 +1454,69 @@ class OnDemandBriefingPlugin(ToolVerba):
         briefings, error = normalize_briefings(raw)
         if error:
             return _default_briefings(), error
-        if not briefings:
-            return _default_briefings(), ""
         return briefings, ""
 
     def _global_setting(self, settings: Dict[str, str], key: str, default: str) -> str:
         value = _text(settings.get(key))
         return value or default
+
+    # ---------------- web UI briefing form ----------------
+
+    def webui_settings_fields(
+        self,
+        *,
+        fields: List[Dict[str, Any]],
+        current_settings: Optional[Dict[Any, Any]] = None,
+        redis_client: Any = None,
+        notifier_destination_catalog: Any = None,
+    ) -> List[Dict[str, Any]]:
+        """Replace the raw BRIEFINGS_JSON field with one editable group per
+        briefing (plus an "Add a briefing" group). Falls back to the JSON
+        field if anything goes wrong."""
+        try:
+            base = [dict(f) for f in (fields or []) if _text(f.get("key") if isinstance(f, dict) else None) != "BRIEFINGS_JSON"]
+            briefings, _ = self._briefings(_decode_redis_map(current_settings or {}))
+            return base + briefing_form_fields(briefings)
+        except Exception:
+            logger.exception("[on_demand_briefing] briefing form fields failed; falling back to JSON field")
+            return fields
+
+    def webui_prepare_settings_values(
+        self,
+        *,
+        values: Dict[str, Any],
+        redis_client: Any = None,
+    ) -> Dict[str, Any]:
+        """Turn the per-briefing form values back into a single BRIEFINGS_JSON
+        setting, and drop the helper keys from what gets stored."""
+        out = dict(values or {})
+        try:
+            base, _ = self._briefings(self._get_settings())
+            rebuilt: List[Dict[str, Any]] = []
+            for item in base:
+                token = _text(item.get("id")) or str(len(rebuilt))
+                prefix = _form_prefix(token)
+                if f"{prefix}NAME" not in out and f"{prefix}REMOVE" not in out:
+                    # Group was not rendered (e.g. stale form); keep unchanged.
+                    rebuilt.append(dict(item))
+                elif _to_bool(out.get(f"{prefix}REMOVE")):
+                    continue
+                else:
+                    rebuilt.append(_apply_briefing_form(dict(item), out, prefix))
+
+            new_name = _text(out.get(f"{_form_prefix(NEW_BRIEF_TOKEN)}NAME"))
+            if new_name:
+                rebuilt.append(_new_briefing_from_form(out, [b.get("id", "") for b in rebuilt]))
+
+            briefings, error = normalize_briefings(rebuilt)
+            if error:
+                # Should not happen from form values; drop helpers and keep prior JSON.
+                logger.warning("[on_demand_briefing] briefing form rebuild rejected: %s", error)
+                return _drop_form_values(out)
+            out["BRIEFINGS_JSON"] = json.dumps(briefings, ensure_ascii=False, indent=2)
+        except Exception:
+            logger.exception("[on_demand_briefing] briefing form rebuild failed")
+        return _drop_form_values(out)
 
     # ---------------- window + identity ----------------
 
