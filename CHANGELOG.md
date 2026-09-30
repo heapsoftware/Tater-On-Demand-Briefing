@@ -4,6 +4,11 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.4.0 — 2026-09-30
+
+- **Features** — Announce briefings can play on **the satellite you asked from**: with announce delivery and an empty target list, a new "Announce on the asking satellite" checkbox resolves the requesting Tater satellite from the trusted portal origin (explicit targets still take precedence; unchanged "all satellites" behavior otherwise).
+- **Features** — The briefing form gains an **Upload Background Audio** field (WAV/MP3/FLAC up to 16 MB), storing uploads in the same shared Agent Lab folder the AI Task core uses and selecting the resulting asset as that briefing's background audio.
+
 ## v0.3.0 — 2026-09-30
 
 - **Features** — Camera briefings can now report plain motion events: adding **motion** to a briefing's camera detection types includes motion-only events (with times and cameras) in the summary instead of silently dropping them as noise.

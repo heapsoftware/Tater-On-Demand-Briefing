@@ -20,11 +20,17 @@ Delivery modes per briefing:
 """
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
+import os
 import re
+import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 
@@ -477,6 +483,29 @@ def _person_instructions_from_context(context: Any) -> str:
     return ""
 
 
+def _requesting_satellite_selector(context: Any) -> str:
+    """Selector of the Tater satellite the current request came from.
+
+    Tater attaches trusted portal origin data to tool calls; the same origin
+    fields the intercom tool uses identify the asking satellite. Returns ""
+    when the request did not come from a known satellite."""
+    ctx = context if isinstance(context, dict) else {}
+    origin = ctx.get("origin") if isinstance(ctx.get("origin"), dict) else {}
+    for source in (origin, ctx):
+        if not isinstance(source, dict):
+            continue
+        selector = _text(source.get("satellite_selector"))
+        if not selector:
+            device_id = _text(source.get("device_id"))
+            if device_id.startswith(("host:", "manual:")):
+                selector = device_id
+        if not selector:
+            selector = _text(source.get("selector"))
+        if selector:
+            return selector
+    return ""
+
+
 def _clamped_int(value: Any, default: int, minimum: int = 0, maximum: int = 100) -> int:
     return _to_int(value, default, minimum, maximum)
 
@@ -515,6 +544,125 @@ def normalize_audio_scene(raw: Any) -> Dict[str, Any]:
             "fade_ms": _clamped_int(finish.get("fade_ms", scene.get("fade_ms")), 500, 0, 10000),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Background audio uploads (same Agent Lab store as the AI Task core)
+# ---------------------------------------------------------------------------
+
+BACKGROUND_AUDIO_MAX_UPLOAD_BYTES = 16 * 1024 * 1024
+
+_BACKGROUND_AUDIO_UPLOAD_EXTENSIONS = {
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/wave": ".wav",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/flac": ".flac",
+    "audio/x-flac": ".flac",
+}
+
+
+def _background_audio_uploads_dir() -> Optional[Path]:
+    """Directory shared with the AI Task core for uploaded background audio."""
+    try:
+        from tater_paths import agent_lab_path
+
+        return agent_lab_path("ai_task", "background_audio", "uploads").resolve()
+    except Exception:
+        configured = str(os.getenv("TATER_AGENT_ROOT") or "").strip()
+        base = Path(configured).expanduser() if configured else Path.cwd() / "agent_lab"
+        try:
+            return (base / "ai_task" / "background_audio" / "uploads").resolve()
+        except Exception:
+            return None
+
+
+def _background_audio_base_url() -> str:
+    try:
+        port = int(str(os.getenv("HTMLUI_PORT") or "8501").strip())
+    except Exception:
+        port = 8501
+    if port < 1 or port > 65535:
+        port = 8501
+    return f"http://127.0.0.1:{port}/api/ai-tasks/background-audio"
+
+
+def _store_background_audio_upload(raw: Any) -> str:
+    """Persist an uploaded audio file into Agent Lab; returns its asset URL.
+
+    Accepts the {filename, content_type, data_b64} payload the web UI file
+    field emits. Raises ValueError with a user-friendly message on bad input
+    so the settings save fails visibly."""
+    upload = raw
+    if isinstance(upload, str):
+        upload_text = upload.strip()
+        if not upload_text:
+            raise ValueError("Choose a WAV, MP3, or FLAC file to upload.")
+        try:
+            upload = json.loads(upload_text)
+        except Exception as exc:
+            raise ValueError("The uploaded background audio could not be decoded.") from exc
+    upload = upload if isinstance(upload, dict) else {}
+    encoded = _text(upload.get("data_b64"))
+    if not encoded:
+        raise ValueError("Choose a WAV, MP3, or FLAC file to upload.")
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise ValueError("The uploaded background audio could not be decoded.") from exc
+    if not data:
+        raise ValueError("The uploaded background audio is empty.")
+    if len(data) > BACKGROUND_AUDIO_MAX_UPLOAD_BYTES:
+        raise ValueError("Uploaded background audio must be 16 MB or smaller.")
+
+    content_type = _text(upload.get("content_type")).lower()
+    extension = ""
+    source_name = _text(upload.get("filename"))
+    source_suffix = Path(source_name).suffix.lower() if source_name else ""
+    if source_suffix in {".wav", ".mp3", ".flac"}:
+        extension = source_suffix
+    elif content_type in _BACKGROUND_AUDIO_UPLOAD_EXTENSIONS:
+        extension = _BACKGROUND_AUDIO_UPLOAD_EXTENSIONS[content_type]
+    else:
+        detected = _detect_background_audio_extension(data)
+        extension = detected
+    if not extension:
+        raise ValueError("Uploaded background audio must be a WAV, MP3, or FLAC file.")
+
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", Path(source_name).stem if source_name else "background-audio").strip("-_").lower()
+    if not safe_stem:
+        safe_stem = "background-audio"
+    filename = f"{safe_stem[:48]}-{hashlib.sha256(data).hexdigest()[:12]}{extension}"
+
+    root = _background_audio_uploads_dir()
+    if root is None:
+        raise ValueError("The Agent Lab directory is unavailable, so the upload could not be stored.")
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / filename
+    if not path.is_file() or path.stat().st_size != len(data):
+        temp_path = root / f".{filename}.{uuid.uuid4().hex}.tmp"
+        try:
+            temp_path.write_bytes(data)
+            os.replace(temp_path, path)
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return f"{_background_audio_base_url()}/uploads/{quote(filename)}"
+
+
+def _detect_background_audio_extension(data: bytes) -> str:
+    """Sniff WAV/MP3/FLAC from magic bytes when the name/content-type lie."""
+    magic = data[:16]
+    if magic[:4] == b"RIFF" and magic[8:12] == b"WAVE":
+        return ".wav"
+    if magic[:3] == b"ID3" or magic[:2] == b"\xff\x3b" or (len(magic) >= 2 and magic[0] == 0xFF and (magic[1] & 0xE0) == 0xE0):
+        return ".mp3"
+    if magic[:4] == b"fLaC":
+        return ".flac"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -783,7 +931,15 @@ def _briefing_group_fields(item: Dict[str, Any], prefix: str, *, include_remove:
                 type="text",
                 value=", ".join(_split_list(delivery.get("targets"))),
                 show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
-                description='Satellite targets like "voice_core:kitchen". Empty announces on every connected satellite.',
+                description='Satellite targets like "voice_core:kitchen". Leave empty and tick "Announce on the asking satellite" to play only where you asked, or leave both empty for every connected satellite.',
+            ),
+            _field(
+                f"{prefix}ASK_SATELLITE",
+                label="Announce on the asking satellite",
+                type="checkbox",
+                value=_to_bool(delivery.get("requester_target"), False),
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+                description="Play the briefing only on the satellite you asked from. Applies when the targets field above is empty; if the asking device cannot be determined, every connected satellite is used.",
             ),
             _field(
                 f"{prefix}BACKGROUND_URL",
@@ -792,7 +948,18 @@ def _briefing_group_fields(item: Dict[str, Any], prefix: str, *, include_remove:
                 value=_text(((delivery.get("background_audio") or {}).get("background") or {}).get("url") or (delivery.get("background_audio") or {}).get("background_url")) if isinstance(delivery.get("background_audio"), dict) else "",
                 show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
                 placeholder="/api/ai-tasks/background-audio/presets/news.wav",
-                description="Looping audio ducked under the announcement TTS. Any asset under /api/ai-tasks/background-audio/. Empty means no background audio. Cleared on save when left empty.",
+                description="Looping audio ducked under the announcement TTS. Any asset under /api/ai-tasks/background-audio/. An upload below overrides this. Empty means no background audio.",
+            ),
+            _field(
+                f"{prefix}BACKGROUND_UPLOAD",
+                label="Upload background audio",
+                type="file",
+                accept=".wav,.mp3,.flac,audio/wav,audio/mpeg,audio/flac",
+                file_encoding="base64",
+                max_bytes=BACKGROUND_AUDIO_MAX_UPLOAD_BYTES,
+                description="WAV, MP3, or FLAC up to 16 MB. Stored in the shared AI Task Agent Lab folder when you save and used as the background audio.",
+                value="",
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
             ),
             _field(
                 f"{prefix}BACKGROUND_LOOP",
@@ -912,8 +1079,12 @@ def _apply_briefing_form(item: Dict[str, Any], values: Dict[str, Any], prefix: s
             targets = _split_list(val("TARGETS"))
             if targets:
                 delivery["targets"] = targets
-            if f"{prefix}BACKGROUND_URL" in values:
-                background_url = _text(val("BACKGROUND_URL"))
+            if f"{prefix}ASK_SATELLITE" in values:
+                delivery["requester_target"] = _to_bool(val("ASK_SATELLITE"), False)
+            upload = values.get(f"{prefix}BACKGROUND_UPLOAD") if f"{prefix}BACKGROUND_UPLOAD" in values else None
+            upload_url = _store_background_audio_upload(upload) if upload not in (None, "") else ""
+            if f"{prefix}BACKGROUND_URL" in values or upload_url:
+                background_url = upload_url or _text(val("BACKGROUND_URL"))
                 existing = delivery.get("background_audio") if isinstance(delivery.get("background_audio"), dict) else {}
                 if background_url:
                     background = dict(existing.get("background") or {})
@@ -1756,7 +1927,7 @@ class OnDemandBriefingPlugin(ToolVerba):
 
     # ---------------- delivery ----------------
 
-    def _announcement_targets(self, delivery: Dict[str, Any]) -> List[str]:
+    def _announcement_targets(self, delivery: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> List[str]:
         raw_targets = delivery.get("targets")
         if isinstance(raw_targets, list) and raw_targets:
             try:
@@ -1765,6 +1936,16 @@ class OnDemandBriefingPlugin(ToolVerba):
                 return [t for t in normalize_announcement_targets(raw_targets) if _text(t)]
             except Exception:
                 return [_text(t) for t in raw_targets if _text(t)]
+
+        if _to_bool(delivery.get("requester_target"), False):
+            selector = _requesting_satellite_selector(context)
+            if selector:
+                try:
+                    from announcement_targets import VOICE_CORE_TARGET_PREFIX, normalize_announcement_targets
+
+                    return [t for t in normalize_announcement_targets([f"{VOICE_CORE_TARGET_PREFIX}{selector}"]) if _text(t)]
+                except Exception:
+                    return [f"voice_core:{selector}"]
 
         try:
             from announcement_targets import VOICE_CORE_TARGET_PREFIX, get_voice_core_satellite_target_options
@@ -1790,8 +1971,8 @@ class OnDemandBriefingPlugin(ToolVerba):
             pass
         return {"base": "", "token": ""}
 
-    async def _deliver_announcement(self, text: str, delivery: Dict[str, Any]) -> Dict[str, Any]:
-        targets = self._announcement_targets(delivery)
+    async def _deliver_announcement(self, text: str, delivery: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        targets = self._announcement_targets(delivery, context)
         if not targets:
             return {"ok": False, "error": "No Tater satellites are connected, so the briefing could not be announced."}
 
@@ -1919,7 +2100,7 @@ class OnDemandBriefingPlugin(ToolVerba):
         delivery = briefing.get("delivery") or {}
         mode = _text(delivery.get("mode")).lower() or "response"
         if mode == "announce":
-            delivered = await self._deliver_announcement(briefing_text, delivery)
+            delivered = await self._deliver_announcement(briefing_text, delivery, context)
             if not delivered.get("ok"):
                 return action_failure(
                     code="briefing_announce_failed",

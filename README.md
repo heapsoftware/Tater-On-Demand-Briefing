@@ -42,9 +42,13 @@ from the settings page without touching code.
 
 Any briefing can use the `announce` delivery mode: the briefing is spoken
 through the announcement path with optional **looping background audio ducked
-under the TTS stream** — the same mechanism the AI Task core uses. Any audio
-asset under `/api/ai-tasks/background-audio/` (presets or uploads) works as the
-background URL. By default briefings use the plain `response` path.
+under the TTS stream** — the same mechanism the AI Task core uses. Upload a
+WAV/MP3/FLAC (up to 16 MB) directly in the briefing form, or use any audio
+asset under `/api/ai-tasks/background-audio/` (presets or uploads) as the
+background URL. Announce briefings can play on every connected satellite, on
+an explicit target list, or on **the satellite you asked from** (leave the
+target list empty and tick "Announce on the asking satellite"). By default
+briefings use the plain `response` path.
 
 ## Setup
 
