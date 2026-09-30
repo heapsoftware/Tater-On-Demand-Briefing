@@ -32,7 +32,9 @@ from the settings page without touching code.
   tool) and summarizes the results into a few spoken sentences, with a
   configurable length and item count.
 - **camera_activity** — UniFi Protect smart-detection events (person, vehicle,
-  package, animal) in the window. Generic motion is noise-filtered by default.
+  package, animal) in the window. Generic motion is noise-filtered by default;
+  add **motion** to a briefing's camera detection types to also report plain
+  motion events (with their times and cameras) to the summary.
 - **presence** — "You were away from about 8:05 am to 4:40 pm, roughly 8 and a
   half hours", derived from Tater's native BLE presence history.
 
@@ -86,6 +88,10 @@ background URL. By default briefings use the plain `response` path.
      (see below).
 
 4. **Try it**: "Hey Tater, give me my morning briefing."
+
+Prompts can also use your **Settings > People** response instructions: Tater
+attaches the asking person's instructions (e.g. "always call me sir") to the
+request, and the briefing summary uses them when addressing you.
 
 ## Adding your own briefing
 

@@ -4,6 +4,11 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.3.0 — 2026-09-30
+
+- **Features** — Camera briefings can now report plain motion events: adding **motion** to a briefing's camera detection types includes motion-only events (with times and cameras) in the summary instead of silently dropping them as noise.
+- **Features** — Briefing summaries now use the asking person's trusted response instructions from Settings > People (e.g. an honorific like "always call me sir") when addressing the user, so prompts saying "their honorific" work in both response and announce delivery.
+
 ## v0.2.1 — 2026-09-30
 
 - **Fixes** — The briefing form editor no longer drops a JSON-authored `background_audio` scene when a briefing is saved, and background audio is settable directly in the UI (URL, loop, volume) for announce-delivery briefings. Also documented the correct nested `background_audio.background` shape (the previously documented flat `url` shape never produced audio).

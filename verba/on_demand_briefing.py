@@ -458,6 +458,25 @@ def _identity_from_context(context: Any) -> str:
     return ""
 
 
+def _person_instructions_from_context(context: Any) -> str:
+    """Trusted person instructions from Settings > People, attached to the
+    portal origin Tater passes in (e.g. 'My name is Steven, but always call
+    me sir.'). These tell the briefing how to address the user."""
+    ctx = context if isinstance(context, dict) else {}
+    sources = []
+    if isinstance(ctx.get("origin"), dict):
+        sources.append(ctx["origin"])
+    sources.append(ctx)
+    for source in sources:
+        resolution = source.get("people_resolution")
+        instructions = _text(source.get("person_instructions"))
+        if not instructions and isinstance(resolution, dict):
+            instructions = _text(resolution.get("instructions"))
+        if instructions:
+            return " ".join(instructions.split())[:400]
+    return ""
+
+
 def _clamped_int(value: Any, default: int, minimum: int = 0, maximum: int = 100) -> int:
     return _to_int(value, default, minimum, maximum)
 
@@ -741,6 +760,7 @@ def _briefing_group_fields(item: Dict[str, Any], prefix: str, *, include_remove:
                 label="Camera detection types",
                 type="multiselect",
                 options=["person", "vehicle", "package", "animal", "motion"],
+                description="Include 'motion' to also report plain motion events that have no person/vehicle/package/animal tag.",
                 value=_split_list(cam.get("detection_types")) or (DEFAULT_DETECTION_TYPES if not is_new else []),
             ),
             _field(
@@ -1312,9 +1332,15 @@ async def camera_activity_section(briefing: Dict[str, Any], window: Dict[str, An
         detected = [_text(item).lower() for item in (detected or []) if _text(item)]
         smart = [item for item in detected if item in detection_types]
         if not smart:
-            if event_type in {"motion", "videoMotion"} or not detected:
-                skipped_motion_only += 1
-            continue
+            is_motion_only = event_type in {"motion", "videoMotion"} or not detected
+            if is_motion_only and "motion" in detection_types:
+                # Plain motion events are included once 'motion' is selected;
+                # they fall through the same camera filter and time checks below.
+                smart = ["motion"]
+            else:
+                if is_motion_only:
+                    skipped_motion_only += 1
+                continue
         camera_id = _text(_first_value(row, "cameraId", "camera", "camera_id", "node"))
         camera_name = camera_names.get(camera_id, camera_id or "a camera")
         if camera_filter and camera_name.casefold() not in camera_filter and camera_id.casefold() not in camera_filter:
@@ -1651,6 +1677,7 @@ class OnDemandBriefingPlugin(ToolVerba):
         section_results: Dict[str, Dict[str, Any]],
         window: Dict[str, Any],
         llm_client: Any,
+        context: Optional[Dict[str, Any]] = None,
     ) -> str:
         style = _text(briefing.get("style")) or self._global_setting(settings, "DEFAULT_STYLE", "brief")
         prompt = _text(briefing.get("prompt")) or (
@@ -1690,11 +1717,19 @@ class OnDemandBriefingPlugin(ToolVerba):
         if llm_client is None:
             return deterministic or empty_message
 
+        person_instructions = _person_instructions_from_context(context)
+        address_line = (
+            "- Address the user per these trusted person instructions from Settings > People: "
+            f"{person_instructions}\n"
+            if person_instructions
+            else ""
+        )
         system = (
             "You write short spoken briefings for Tater. Follow the briefing instructions.\n"
             "Rules:\n"
             "- Spoken-friendly: short sentences, natural times ('around ten past ten'), no markdown, no lists, no URLs.\n"
             "- Use ONLY the provided section data. Never fabricate events, names, numbers, or times.\n"
+            f"{address_line}"
             "- If a section reported an error, briefly mention that piece was unavailable; still deliver the rest.\n"
             f"- Style: {style}.\n"
             "- If every section is empty, reply with exactly: EMPTY\n"
@@ -1879,7 +1914,7 @@ class OnDemandBriefingPlugin(ToolVerba):
                 logger.exception("[on_demand_briefing] section '%s' failed", name)
                 section_results[name] = {"ok": False, "summary": "", "data": {}, "error": f"The {name} section failed: {exc}"}
 
-        briefing_text = await self._summarize(briefing, settings, section_results, window, llm_client)
+        briefing_text = await self._summarize(briefing, settings, section_results, window, llm_client, context)
 
         delivery = briefing.get("delivery") or {}
         mode = _text(delivery.get("mode")).lower() or "response"
