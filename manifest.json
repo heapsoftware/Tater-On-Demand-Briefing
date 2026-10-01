@@ -4,15 +4,29 @@
     {
       "id": "on_demand_briefing",
       "name": "On Demand Briefing",
-      "version": "0.4.3",
+      "version": "0.4.4",
       "min_tater_version": "99",
       "description": "Spoken briefings on demand with configurable sections: time, weather, news, UniFi Protect camera activity, and BLE presence. Includes Morning and Welcome Home briefings, configurable briefing definitions, and optional background audio with ducked TTS announcements.",
-      "portals": ["voice_core", "webui", "homeassistant", "homekit", "xbmc", "macos", "little_spud"],
+      "portals": [
+        "voice_core",
+        "webui",
+        "homeassistant",
+        "homekit",
+        "xbmc",
+        "macos",
+        "little_spud"
+      ],
       "notifier": false,
       "settings_category": "On Demand Briefing",
-      "tags": ["briefing", "weather", "news", "presence", "unifi protect"],
+      "tags": [
+        "briefing",
+        "weather",
+        "news",
+        "presence",
+        "unifi protect"
+      ],
       "entry": "verba/on_demand_briefing.py",
-      "sha256": "07390ee1dd09ac4d7c45df12988ee4fc81fb75413eec8763bc3b84229718df68"
+      "sha256": "bd95ec4f49440fc2babae9cb66802df818bfd9dfadba0c788768f2fc0494d406"
     }
   ]
 }

@@ -506,6 +506,14 @@ def _requesting_satellite_selector(context: Any) -> str:
     return ""
 
 
+def _briefing_target_selector(token: Any) -> str:
+    """Bare voice-core selector behind an announcement target token."""
+    text = _text(token)
+    if text.lower().startswith("voice_core:"):
+        text = text[len("voice_core:"):]
+    return text
+
+
 def _clamped_int(value: Any, default: int, minimum: int = 0, maximum: int = 100) -> int:
     return _to_int(value, default, minimum, maximum)
 
@@ -1663,7 +1671,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.4.3"
+    version = "0.4.4"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
@@ -1681,7 +1689,11 @@ class OnDemandBriefingPlugin(ToolVerba):
     )
     how_to_use = (
         "Pass the user's request in query, or pass the briefing name in briefing when known. "
-        "The verba resolves the briefing, runs its sections, and returns spoken text."
+        "The verba resolves the briefing, runs its sections, and returns spoken text. "
+        "When the result says the briefing was announced, the audio already played over the satellite speakers "
+        "during this tool call — respond with only a brief confirmation and never offer to play it again. "
+        "When the result marks played_on_requesting_satellite/speak=false, the briefing just played on the very "
+        "satellite the user spoke from, so no confirmation is wanted at all."
     )
     common_needs = ["Which briefing the user wants, when several are configured."]
     missing_info_prompts = ["Which briefing would you like?"]
@@ -2130,12 +2142,19 @@ class OnDemandBriefingPlugin(ToolVerba):
         sent = int(result.get("sent_count") or 0)
         if not result.get("ok") or sent <= 0:
             return {"ok": False, "error": _text(result.get("error")) or "The briefing announcement failed on all targets."}
+        # The briefing played on exactly the satellite the request came from?
+        requester_selector = _requesting_satellite_selector(context)
+        target_selectors = {_briefing_target_selector(item) for item in targets if _briefing_target_selector(item)}
+        requester_announced = bool(requester_selector) and target_selectors == {requester_selector}
         return {
             "ok": True,
             "sent_count": sent,
             "target_count": int(result.get("target_count") or len(targets)),
+            "targets": targets,
+            "requester_announced": requester_announced,
             "audio_scene_sent_count": int(result.get("audio_scene_sent_count") or 0),
             "audio_scene_fallback_count": int(result.get("audio_scene_fallback_count") or 0),
+            "audio_scene_warnings": [ _text(item) for item in list(result.get("audio_scene_warnings") or []) if _text(item) ],
         }
 
     # ---------------- core ----------------
@@ -2225,21 +2244,54 @@ class OnDemandBriefingPlugin(ToolVerba):
                     message=_text(delivered.get("error")) or "The briefing announcement failed.",
                     say_hint="Explain the briefing could not be announced.",
                 )
+            scene_requested = bool(normalize_audio_scene(delivery.get("background_audio") or delivery.get("audio_scene")))
+            music_note = ""
             fallback_note = ""
-            if delivered.get("audio_scene_fallback_count"):
+            if scene_requested and not int(delivered.get("audio_scene_sent_count") or 0):
                 fallback_note = " Some satellites played it without the background audio."
-            return action_success(
+            elif scene_requested:
+                music_note = " Background music was playing under the readout."
+            warnings_note = ""
+            audio_warnings = list(delivered.get("audio_scene_warnings") or [])
+            if scene_requested and audio_warnings:
+                warnings_note = f" Background audio notes: {'; '.join(audio_warnings[:3])}."
+            requester_announced = bool(delivered.get("requester_announced"))
+            result = action_success(
                 facts={
                     "briefing": briefing.get("id"),
                     "delivered_to": delivered.get("sent_count"),
                     "target_count": delivered.get("target_count"),
-                    "background_audio": bool(normalize_audio_scene(delivery.get("background_audio") or delivery.get("audio_scene"))),
+                    "played_on_requesting_satellite": requester_announced,
+                    "background_audio": scene_requested,
+                    "background_audio_started": scene_requested and bool(int(delivered.get("audio_scene_sent_count") or 0)),
+                    "background_audio_fallback": fallback_note != "",
                     "sections": {name: result.get("ok") for name, result in section_results.items()},
                 },
                 data={"briefing_text": briefing_text, "sections": {name: result.get("data") for name, result in section_results.items()}},
-                summary_for_user=f"Your {briefing.get('name')} was delivered to {delivered.get('sent_count')} target{'s' if delivered.get('sent_count') != 1 else ''}." + fallback_note,
-                say_hint="Briefly confirm the briefing was just announced. Do not repeat the briefing text.",
+                summary_for_user=(
+                    f"Your {briefing.get('name')} was just announced aloud over the satellite speakers "
+                    f"({delivered.get('sent_count')} target{'s' if delivered.get('sent_count') != 1 else ''})."
+                    + music_note
+                    + fallback_note
+                    + warnings_note
+                ),
+                say_hint=(
+                    "Briefly confirm the briefing just played aloud over the satellite speakers. "
+                    "It already played through; do not repeat the briefing text, and never offer or ask to play it again."
+                ),
             )
+            if requester_announced:
+                # The briefing audio itself just played on the satellite the user
+                # spoke from, so a spoken confirmation would be a redundant reply
+                # over it. "speak" is a proposed tool-result contract: once the
+                # Tater core honors it, the reply TTS is skipped entirely (spec:
+                # /home/on-demand-briefing/tts-silent-tool-reply-spec.md).
+                result["speak"] = False
+                result["say_hint"] = (
+                    "The briefing just played directly on the user's own satellite. "
+                    "Say nothing at all — no confirmation, no offer, no reply text."
+                )
+            return result
 
         return action_success(
             facts={"briefing": briefing.get("id"), "sections": {name: result.get("ok") for name, result in section_results.items()}},

@@ -4,6 +4,12 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.4.4 — 2026-10-01
+
+- **Fixes** — Announced briefings no longer get a follow-up reply that talks as if playback is pending ("Shall I begin the readout?"): the tool result now states plainly that the briefing announced itself aloud over the satellite speakers during the tool call, the response instructions forbid offering or asking to play it again, and the planner-facing tool description carries the same rule.
+- **Features** — When an announced briefing plays on *exactly* the satellite you asked from, the result is marked `speak: false` and the reply instructions say to stay silent: the briefing audio already played right there and no confirmation is wanted. Briefings announced to other satellites keep today's spoken confirmation. The `speak: false` contract needs a small Tater core change (spec'd in `tts-silent-tool-reply-spec.md`) and is inert until that lands; the summary wording makes the interim reply as short as possible.
+- **Changes** — Also surfaces background-audio warnings in the result and adds `played_on_requesting_satellite`, `background_audio_started` / `background_audio_fallback` facts so a silent music track is diagnosable.
+
 ## v0.4.3 — 2026-09-30
 
 - **Features** — Uploaded background audio cleans itself up: saving settings now deletes files that the previous briefing definitions referenced and the new ones no longer do (briefing removed, background music cleared, or a file swapped for a new upload). Deletion is guarded — a file stays put while any remaining briefing points at it, when AI Task core Redis data mentions it, and whenever the usage scan cannot complete.
