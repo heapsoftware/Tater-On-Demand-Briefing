@@ -53,6 +53,18 @@ audio is cleared or swapped in the form, the no-longer-referenced file is
 deleted — unless another briefing or the AI Task core still uses it. By default
 briefings use the plain `response` path.
 
+### Reply line before the briefing
+
+When an announce briefing plays on **the satellite you asked from**, Tater
+replies first ("Your Morning Briefing will begin shortly.") and the briefing
+plays right after — no redundant confirmation afterwards. The line is
+customizable per briefing ("Reply line before the briefing", `{name}` inserts
+the briefing name), or tick "Let the assistant write the reply line" to have
+it composed fresh each time using your person instructions from
+Settings > People (e.g. sir or ma'am). If the announcement fails, a short
+spoken notice says so on the same satellite. Briefings announced to other
+satellites keep the immediate playback plus spoken confirmation.
+
 ## Setup
 
 1. **Install the verba** — in Tater's UI, go to **Settings → Verba** and add

@@ -4,6 +4,12 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.4.5 — 2026-10-01
+
+- **Features** — Announced briefings that play on exactly the satellite you asked from now reply first ("Your Morning Briefing will begin shortly.") and play the announcement right after the reply, instead of the briefing playing during the tool call and a redundant confirmation following it. The heavy work (sections, summary, announcement) runs as a background job; failures are spoken on the same satellite so the ack is never followed by unexplained silence. The `speak: false` interim from v0.4.4 is superseded on this path and no longer set (see `tts-silent-tool-reply-spec.md`).
+- **Features** — New per-briefing "Reply line before the briefing" setting (`delivery.ack_line`, form field for announce-mode briefings) to customize the spoken line; `{name}` substitutes the briefing name, and empty uses the default "Your {name} briefing will begin shortly." A companion "Let the assistant write the reply line" checkbox (`delivery.ack_llm`) has the assistant compose its own one-sentence reply instead, using the asking user's trusted person instructions from Settings > People (e.g. sir or ma'am).
+- **Changes** — Briefings announced to other satellites keep the current behavior (announcement during the tool call, spoken confirmation on the asking satellite).
+
 ## v0.4.4 — 2026-10-01
 
 - **Fixes** — Announced briefings no longer get a follow-up reply that talks as if playback is pending ("Shall I begin the readout?"): the tool result now states plainly that the briefing announced itself aloud over the satellite speakers during the tool call, the response instructions forbid offering or asking to play it again, and the planner-facing tool description carries the same rule.

@@ -46,6 +46,12 @@ SETTINGS_CATEGORY = "On Demand Briefing"
 
 DEFAULT_DETECTION_TYPES = ["person", "vehicle", "package", "animal"]
 
+# Head start the deferred announcement job gives the ack reply, so the
+# announcement never interrupts the spoken "will begin shortly" line.
+DEFERRED_ANNOUNCEMENT_HEAD_START_S = 1.0
+# Extra pause before a spoken failure notice so it lands after the ack reply.
+ANNOUNCEMENT_FAILURE_NOTICE_DELAY_S = 1.5
+
 MORNING_PROMPT = (
     "Write a short greeting, share the current weather in one or two sentences, then summarize "
     "notable overnight camera detections with approximate times and camera locations. "
@@ -512,6 +518,23 @@ def _briefing_target_selector(token: Any) -> str:
     if text.lower().startswith("voice_core:"):
         text = text[len("voice_core:"):]
     return text
+
+
+def _briefing_display_name(name: Any) -> str:
+    """Briefing name that reads naturally after "the" or "Your" (avoids
+    "Your Morning Briefing briefing")."""
+    clean = _text(name) or "briefing"
+    return clean if clean.lower().endswith("briefing") else f"{clean} briefing"
+
+
+def _briefing_ack_line(delivery: Dict[str, Any], name: Any) -> str:
+    """Spoken reply used before an announced briefing plays on the asking
+    satellite. Per-briefing ``delivery.ack_line`` overrides the default; use
+    ``{name}`` in the custom line for the briefing name."""
+    custom = _text((delivery or {}).get("ack_line"))
+    if custom:
+        return custom.replace("{name}", _text(name) or "briefing")
+    return f"Your {_briefing_display_name(name)} will begin shortly."
 
 
 def _clamped_int(value: Any, default: int, minimum: int = 0, maximum: int = 100) -> int:
@@ -1048,6 +1071,23 @@ def _briefing_group_fields(item: Dict[str, Any], prefix: str, *, include_remove:
                 description="Play the briefing only on the satellite you asked from. Applies when the targets field above is empty; if the asking device cannot be determined, every connected satellite is used.",
             ),
             _field(
+                f"{prefix}ACK_LINE",
+                label="Reply line before the briefing",
+                type="text",
+                value=_text(delivery.get("ack_line")),
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+                placeholder="Your Morning Briefing will begin shortly.",
+                description="Spoken on the asking satellite just before an announced briefing plays there. Use {name} for the briefing name. Empty uses \"Your {name} briefing will begin shortly.\"",
+            ),
+            _field(
+                f"{prefix}ACK_LLM",
+                label="Let the assistant write the reply line",
+                type="checkbox",
+                value=_to_bool(delivery.get("ack_llm"), False),
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+                description="The assistant composes its own short reply instead of using the line above, and may address you per your person instructions from Settings > People (for example sir or ma'am).",
+            ),
+            _field(
                 f"{prefix}BACKGROUND_URL",
                 label="Background audio URL",
                 type="text",
@@ -1187,6 +1227,17 @@ def _apply_briefing_form(item: Dict[str, Any], values: Dict[str, Any], prefix: s
                 delivery["targets"] = targets
             if f"{prefix}ASK_SATELLITE" in values:
                 delivery["requester_target"] = _to_bool(val("ASK_SATELLITE"), False)
+            if f"{prefix}ACK_LINE" in values:
+                ack_line = _text(val("ACK_LINE"))
+                if ack_line:
+                    delivery["ack_line"] = ack_line
+                else:
+                    delivery.pop("ack_line", None)
+            if f"{prefix}ACK_LLM" in values:
+                if _to_bool(val("ACK_LLM"), False):
+                    delivery["ack_llm"] = True
+                else:
+                    delivery.pop("ack_llm", None)
             upload = values.get(f"{prefix}BACKGROUND_UPLOAD") if f"{prefix}BACKGROUND_UPLOAD" in values else None
             upload_url = _store_background_audio_upload(upload) if upload not in (None, "") else ""
             if f"{prefix}BACKGROUND_URL" in values or upload_url:
@@ -1671,9 +1722,14 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.4.4"
+    version = "0.4.5"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
+
+    # Deferred requester-satellite announcement job. Kept referenced so the
+    # event loop does not garbage-collect it; tests await it to let the
+    # deferred announcement run.
+    _background_announcement_task: Any = None
 
     description = (
         "Run a spoken briefing on demand: morning briefing, daily briefing, security briefing, "
@@ -1692,8 +1748,9 @@ class OnDemandBriefingPlugin(ToolVerba):
         "The verba resolves the briefing, runs its sections, and returns spoken text. "
         "When the result says the briefing was announced, the audio already played over the satellite speakers "
         "during this tool call — respond with only a brief confirmation and never offer to play it again. "
-        "When the result marks played_on_requesting_satellite/speak=false, the briefing just played on the very "
-        "satellite the user spoke from, so no confirmation is wanted at all."
+        "When the result marks queued_for_requesting_satellite, the briefing was queued to play on the very "
+        "satellite the user spoke from and starts right after this reply — follow the reply instruction in the "
+        "result: speak only the exact line it gives, or the one short line it asks you to compose, and nothing else."
     )
     common_needs = ["Which briefing the user wants, when several are configured."]
     missing_info_prompts = ["Which briefing would you like?"]
@@ -1776,7 +1833,7 @@ class OnDemandBriefingPlugin(ToolVerba):
             "label": "Briefing Definitions (advanced JSON)",
             "type": "text",
             "default": "",
-            "description": "Advanced raw JSON for briefing definitions (only shown if the per-briefing form editor is unavailable). Leave empty to use the built-in Morning and Welcome Home briefings. Each briefing supports: id, name, enabled, trigger_phrases, sections, time_window, prompt, style, empty_message, identity, section_options, delivery.",
+            "description": "Advanced raw JSON for briefing definitions (only shown if the per-briefing form editor is unavailable). Leave empty to use the built-in Morning and Welcome Home briefings. Each briefing supports: id, name, enabled, trigger_phrases, sections, time_window, prompt, style, empty_message, identity, section_options, delivery (mode, targets, requester_target, ack_line, background_audio).",
         },
     }
 
@@ -2106,34 +2163,16 @@ class OnDemandBriefingPlugin(ToolVerba):
         if not targets:
             return {"ok": False, "error": "No Tater satellites are connected, so the briefing could not be announced."}
 
-        from speech_settings import get_speech_settings
         from speech_tts import speak_announcement_targets
 
-        speech = get_speech_settings() or {}
-        ha = self._homeassistant_config()
-        announcement_backend = str(speech.get("announcement_tts_backend") or speech.get("tts_backend") or "wyoming")
         scene = normalize_audio_scene(delivery.get("background_audio") or delivery.get("audio_scene"))
 
         try:
             result = await speak_announcement_targets(
                 text=text,
-                backend=announcement_backend,
-                ha_base=str(ha.get("base") or ""),
-                token=str(ha.get("token") or ""),
                 targets=targets,
-                model=str(speech.get("announcement_tts_model") or ""),
-                voice=str(speech.get("announcement_tts_voice") or ""),
-                wyoming_host=str(speech.get("wyoming_tts_host") or ""),
-                wyoming_port=speech.get("wyoming_tts_port"),
-                wyoming_voice=str(speech.get("wyoming_tts_voice") or ""),
-                voice_core_backend=str(speech.get("tts_backend") or ""),
-                voice_core_model=str(speech.get("tts_model") or ""),
-                voice_core_voice=str(speech.get("tts_voice") or ""),
-                voice_core_wyoming_host=str(speech.get("wyoming_tts_host") or ""),
-                voice_core_wyoming_port=speech.get("wyoming_tts_port"),
-                voice_core_wyoming_voice=str(speech.get("wyoming_tts_voice") or ""),
-                default_backend=announcement_backend,
                 audio_scene=scene,
+                **self._announcement_tts_kwargs(),
             )
         except Exception as exc:
             logger.error("[on_demand_briefing] announcement TTS call failed: %s", exc)
@@ -2156,6 +2195,245 @@ class OnDemandBriefingPlugin(ToolVerba):
             "audio_scene_fallback_count": int(result.get("audio_scene_fallback_count") or 0),
             "audio_scene_warnings": [ _text(item) for item in list(result.get("audio_scene_warnings") or []) if _text(item) ],
         }
+
+    def _announcement_tts_kwargs(self) -> Dict[str, Any]:
+        """Shared speak_announcement_targets kwargs built from speech settings."""
+        from speech_settings import get_speech_settings
+
+        speech = get_speech_settings() or {}
+        ha = self._homeassistant_config()
+        announcement_backend = str(speech.get("announcement_tts_backend") or speech.get("tts_backend") or "wyoming")
+        return {
+            "backend": announcement_backend,
+            "ha_base": str(ha.get("base") or ""),
+            "token": str(ha.get("token") or ""),
+            "model": str(speech.get("announcement_tts_model") or ""),
+            "voice": str(speech.get("announcement_tts_voice") or ""),
+            "wyoming_host": str(speech.get("wyoming_tts_host") or ""),
+            "wyoming_port": speech.get("wyoming_tts_port"),
+            "wyoming_voice": str(speech.get("wyoming_tts_voice") or ""),
+            "voice_core_backend": str(speech.get("tts_backend") or ""),
+            "voice_core_model": str(speech.get("tts_model") or ""),
+            "voice_core_voice": str(speech.get("tts_voice") or ""),
+            "voice_core_wyoming_host": str(speech.get("wyoming_tts_host") or ""),
+            "voice_core_wyoming_port": speech.get("wyoming_tts_port"),
+            "voice_core_wyoming_voice": str(speech.get("wyoming_tts_voice") or ""),
+            "default_backend": announcement_backend,
+        }
+
+    def _announce_targets_requester_only(self, delivery: Dict[str, Any], context: Optional[Dict[str, Any]]) -> bool:
+        """True when the announcement will play on exactly the asking satellite."""
+        requester = _requesting_satellite_selector(context)
+        if not requester:
+            return False
+        targets = self._announcement_targets(delivery, context)
+        selectors = {_briefing_target_selector(item) for item in targets if _briefing_target_selector(item)}
+        return selectors == {requester}
+
+    def _defer_requester_announcement(
+        self,
+        briefing: Dict[str, Any],
+        settings: Dict[str, str],
+        section_names: List[str],
+        window_config: Dict[str, Any],
+        strategy: str,
+        delivery: Dict[str, Any],
+        context: Optional[Dict[str, Any]],
+        llm_client: Any,
+    ) -> Dict[str, Any]:
+        """Queue the briefing to play on the asking satellite right after the
+        reply, and ack immediately ("Your ... briefing will begin shortly").
+
+        Announcing inside the tool call made the briefing play first and the
+        spoken confirmation after it; deferring flips that into
+        ack -> briefing -> silence with no redundant after-talk. Failures are
+        spoken on the same satellite so the ack is never followed by
+        unexplained silence."""
+        default_ack = _briefing_ack_line(delivery, briefing.get("name"))
+        if _to_bool(delivery.get("ack_llm"), False):
+            # The assistant composes its own short reply, using the asking
+            # user's trusted person instructions (sir/ma'am) when known.
+            instructions = _person_instructions_from_context(context)
+            identity_note = (
+                f' The user\'s trusted person instructions are: "{instructions}"'
+                if instructions
+                else ""
+            )
+            summary_for_user = default_ack
+            say_hint = (
+                "Compose a very short reply (one short sentence) telling the user the briefing "
+                "is on its way and will begin shortly."
+                + identity_note
+                + " Do not mention the briefing contents; the briefing plays right after this reply."
+            )
+        else:
+            summary_for_user = default_ack
+            say_hint = (
+                f'Say exactly: "{default_ack}" and nothing else. '
+                "The briefing itself plays in a moment; do not add any other words."
+            )
+        try:
+            task = asyncio.create_task(
+                self._requester_announcement_job(
+                    briefing, settings, section_names, window_config, strategy, delivery, context, llm_client
+                )
+            )
+            # Keep a reference so the loop does not garbage-collect the task.
+            self._background_announcement_task = task
+        except Exception as exc:
+            logger.exception("[on_demand_briefing] failed to schedule deferred announcement")
+            return action_failure(
+                code="briefing_announce_defer_failed",
+                message=f"The briefing could not be scheduled: {exc}",
+                say_hint="Explain the briefing could not be announced.",
+            )
+        return action_success(
+            facts={
+                "briefing": briefing.get("id"),
+                "queued_for_requesting_satellite": True,
+                "background_started": True,
+            },
+            data={},
+            summary_for_user=summary_for_user,
+            say_hint=say_hint,
+        )
+
+    async def _requester_announcement_job(
+        self,
+        briefing: Dict[str, Any],
+        settings: Dict[str, str],
+        section_names: List[str],
+        window_config: Dict[str, Any],
+        strategy: str,
+        delivery: Dict[str, Any],
+        context: Optional[Dict[str, Any]],
+        llm_client: Any,
+    ) -> None:
+        name = _briefing_display_name(briefing.get("name"))
+        try:
+            # Let the ack reply start playing before the announcement runs.
+            await asyncio.sleep(DEFERRED_ANNOUNCEMENT_HEAD_START_S)
+            briefing_text, _section_results, _window, window_error = await self._gather_briefing_text(
+                briefing, settings, section_names, window_config, strategy, context,
+                self._background_llm_client(llm_client),
+            )
+            failure = ""
+            if window_error:
+                failure = f"The briefing time window could not be resolved: {window_error}"
+            elif not _text(briefing_text):
+                failure = f"The {_briefing_display_name(briefing.get('name'))} had nothing to report."
+            else:
+                delivered = await self._deliver_announcement(briefing_text, delivery, context)
+                if not delivered.get("ok"):
+                    failure = _text(delivered.get("error")) or f"The {name} could not be announced."
+            if failure:
+                logger.error("[on_demand_briefing] deferred announcement failed: %s", failure)
+                await self._speak_announcement_failure(delivery, context, name)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("[on_demand_briefing] deferred announcement job failed")
+            try:
+                await self._speak_announcement_failure(delivery, context, name)
+            except Exception:
+                logger.exception("[on_demand_briefing] failure notice could not be spoken")
+
+    def _background_llm_client(self, llm_client: Any = None) -> Any:
+        """Fresh client for the deferred job: the turn-scoped client the
+        pipeline handed the tool may be closed once the turn ends (same
+        approach as the ComfyUI Audio Ace verba). Returns None to fall back to
+        the deterministic summary when no client can be built."""
+        try:
+            from helpers import redis_client
+            try:
+                from helpers import get_primary_llm_client_from_env as builder
+            except Exception:
+                from helpers import get_llm_client_from_env as builder
+            return builder(redis_conn=redis_client)
+        except Exception:
+            logger.warning("[on_demand_briefing] background LLM client unavailable; using deterministic summary", exc_info=True)
+            return None
+
+    async def _speak_announcement_failure(
+        self, delivery: Dict[str, Any], context: Optional[Dict[str, Any]], name: str
+    ) -> None:
+        """Speak a short failure notice where the briefing would have played,
+        so the ack reply is never followed by unexplained silence."""
+        targets = self._announcement_targets(delivery, context)
+        if not targets:
+            logger.warning("[on_demand_briefing] failure notice skipped: no announcement targets")
+            return
+        from speech_tts import speak_announcement_targets
+
+        await asyncio.sleep(ANNOUNCEMENT_FAILURE_NOTICE_DELAY_S)
+        result = await speak_announcement_targets(
+            text=f"Sorry, the {name} could not be played right now.",
+            targets=targets,
+            **self._announcement_tts_kwargs(),
+        )
+        sent = int(result.get("sent_count") or 0)
+        if not result.get("ok") or sent <= 0:
+            logger.warning(
+                "[on_demand_briefing] failure notice could not be spoken: %s",
+                _text(result.get("error")) if isinstance(result, dict) else result,
+            )
+
+    async def _gather_briefing_text(
+        self,
+        briefing: Dict[str, Any],
+        settings: Dict[str, str],
+        section_names: List[str],
+        window_config: Dict[str, Any],
+        strategy: str,
+        context: Optional[Dict[str, Any]],
+        llm_client: Any,
+    ) -> Tuple[str, Dict[str, Dict[str, Any]], Dict[str, Any], str]:
+        """Shared pipeline: presence window, section providers, summarize.
+        Returns (briefing_text, section_results, window, error) where error is
+        the unresolved-window detail ("" on success)."""
+        away = {"status": "no_data", "start": None, "end": None, "duration_s": None}
+        needs_away = strategy == "last_away_period" or "presence" in section_names
+        if needs_away:
+            device_token, _identity_label = await self._resolve_presence_identity(settings, briefing, context)
+            away = await self._compute_away(settings, device_token)
+
+        now = _local_now()
+        window_required = "camera_activity" in section_names or strategy in {"since_time", "last_n_hours", "last_away_period"}
+        start = end = None
+        window_error = ""
+        if window_required:
+            start, end, window_error = resolve_window(window_config, away, now=now)
+        window = {
+            "strategy": strategy or ("last_away_period" if needs_away else "none"),
+            "start": start.isoformat() if start else "",
+            "end": end.isoformat() if end else "",
+        }
+        if window_required and (start is None or end is None):
+            return "", {}, window, window_error or "The briefing time window could not be resolved."
+
+        runtime = {
+            "llm_client": llm_client,
+            "settings": settings,
+            "away_window": away,
+            "protect_client": None,
+        }
+        if "camera_activity" in section_names:
+            runtime["protect_client"] = _protect_client()
+
+        section_results: Dict[str, Dict[str, Any]] = {}
+        for section_name in section_names:
+            provider = SECTION_PROVIDERS.get(section_name)
+            if provider is None:
+                section_results[section_name] = {"ok": False, "summary": "", "data": {}, "error": f"Unknown section '{section_name}'."}
+                continue
+            try:
+                section_results[section_name] = await provider(briefing, window, runtime)
+            except Exception as exc:
+                logger.exception("[on_demand_briefing] section '%s' failed", section_name)
+                section_results[section_name] = {"ok": False, "summary": "", "data": {}, "error": f"The {section_name} section failed: {exc}"}
+
+        briefing_text = await self._summarize(briefing, settings, section_results, window, llm_client, context)
+        return briefing_text, section_results, window, ""
 
     # ---------------- core ----------------
 
@@ -2184,58 +2462,30 @@ class OnDemandBriefingPlugin(ToolVerba):
         window_config = briefing.get("time_window") or {}
         strategy = _text(window_config.get("strategy")).lower()
 
-        away = {"status": "no_data", "start": None, "end": None, "duration_s": None}
-        needs_away = strategy == "last_away_period" or "presence" in section_names
-        if needs_away:
-            device_token, _identity_label = await self._resolve_presence_identity(settings, briefing, context)
-            away = await self._compute_away(settings, device_token)
-
-        now = _local_now()
-        window_required = "camera_activity" in section_names or strategy in {"since_time", "last_n_hours", "last_away_period"}
-        start = end = None
-        window_error = ""
-        if window_required:
-            start, end, window_error = resolve_window(window_config, away, now=now)
-        window = {
-            "strategy": strategy or ("last_away_period" if needs_away else "none"),
-            "start": start.isoformat() if start else "",
-            "end": end.isoformat() if end else "",
-        }
-        if window_required and (start is None or end is None):
-            detail = window_error or "The briefing time window could not be resolved."
-            if "presence" in detail.lower() or strategy == "last_away_period":
-                return action_failure(
-                    code="briefing_window_unavailable",
-                    message=detail,
-                    say_hint="Explain that presence data for that person is unavailable or shows no departure.",
-                )
-            return action_failure(code="briefing_window_invalid", message=detail)
-
-        runtime = {
-            "llm_client": llm_client,
-            "settings": settings,
-            "away_window": away,
-            "protect_client": None,
-        }
-        if "camera_activity" in section_names:
-            runtime["protect_client"] = _protect_client()
-
-        section_results: Dict[str, Dict[str, Any]] = {}
-        for name in section_names:
-            provider = SECTION_PROVIDERS.get(name)
-            if provider is None:
-                section_results[name] = {"ok": False, "summary": "", "data": {}, "error": f"Unknown section '{name}'."}
-                continue
-            try:
-                section_results[name] = await provider(briefing, window, runtime)
-            except Exception as exc:
-                logger.exception("[on_demand_briefing] section '%s' failed", name)
-                section_results[name] = {"ok": False, "summary": "", "data": {}, "error": f"The {name} section failed: {exc}"}
-
-        briefing_text = await self._summarize(briefing, settings, section_results, window, llm_client, context)
-
         delivery = briefing.get("delivery") or {}
         mode = _text(delivery.get("mode")).lower() or "response"
+
+        # Announcements that play on exactly the asking satellite are deferred:
+        # the tool acks ("Your ... briefing will begin shortly") and the
+        # announcement runs right after the reply, instead of the briefing
+        # playing during the tool call and a spoken confirmation following it.
+        if mode == "announce" and self._announce_targets_requester_only(delivery, context):
+            return self._defer_requester_announcement(
+                briefing, settings, section_names, window_config, strategy, delivery, context, llm_client
+            )
+
+        briefing_text, section_results, window, window_error_detail = await self._gather_briefing_text(
+            briefing, settings, section_names, window_config, strategy, context, llm_client
+        )
+        if window_error_detail:
+            if "presence" in window_error_detail.lower() or strategy == "last_away_period":
+                return action_failure(
+                    code="briefing_window_unavailable",
+                    message=window_error_detail,
+                    say_hint="Explain that presence data for that person is unavailable or shows no departure.",
+                )
+            return action_failure(code="briefing_window_invalid", message=window_error_detail)
+
         if mode == "announce":
             delivered = await self._deliver_announcement(briefing_text, delivery, context)
             if not delivered.get("ok"):
@@ -2280,17 +2530,6 @@ class OnDemandBriefingPlugin(ToolVerba):
                     "It already played through; do not repeat the briefing text, and never offer or ask to play it again."
                 ),
             )
-            if requester_announced:
-                # The briefing audio itself just played on the satellite the user
-                # spoke from, so a spoken confirmation would be a redundant reply
-                # over it. "speak" is a proposed tool-result contract: once the
-                # Tater core honors it, the reply TTS is skipped entirely (spec:
-                # /home/on-demand-briefing/tts-silent-tool-reply-spec.md).
-                result["speak"] = False
-                result["say_hint"] = (
-                    "The briefing just played directly on the user's own satellite. "
-                    "Say nothing at all — no confirmation, no offer, no reply text."
-                )
             return result
 
         return action_success(
