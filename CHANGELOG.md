@@ -4,6 +4,12 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.5.0 — 2026-10-01
+
+- **Features** — New per-briefing "TTS start delay (ms)" setting for announce-mode briefings: the background audio now plays at full volume for that many milliseconds before the spoken briefing starts and ducks it in (the "music lead-in"). Stored as `delivery.background_audio.foreground.start_delay_ms`, clamped to 0–30000, default 0 (current behavior). Honored by Tater v1.2.5+, which renders the whole scene server-side; on older Tater the key is ignored and the voice starts immediately.
+- **Features** — New per-briefing "Music volume while speaking (percent)" setting to tune how loud the background audio stays while the voice is speaking. Stored as `delivery.background_audio.ducking.target_percent`, clamped to 0–300, default 35. 100 keeps the music unducked; values above 100 boost it above its normal level (needs a Tater core with the extended volume range — standard cores cap at 100).
+- **Changes** — `normalize_audio_scene` now passes `foreground.start_delay_ms` through and allows `ducking.target_percent` up to 300 (was capped at 100).
+
 ## v0.4.5 — 2026-10-01
 
 - **Features** — Announced briefings that play on exactly the satellite you asked from now reply first ("Your Morning Briefing will begin shortly.") and play the announcement right after the reply, instead of the briefing playing during the tool call and a redundant confirmation following it. The heavy work (sections, summary, announcement) runs as a background job; failures are spoken on the same satellite so the ack is never followed by unexplained silence. The `speak: false` interim from v0.4.4 is superseded on this path and no longer set (see `tts-silent-tool-reply-spec.md`).

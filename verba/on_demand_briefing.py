@@ -545,6 +545,7 @@ def normalize_audio_scene(raw: Any) -> Dict[str, Any]:
     """Normalize the background-audio scene; same shape as the Broadcast verba."""
     scene = raw if isinstance(raw, dict) else {}
     background = scene.get("background") if isinstance(scene.get("background"), dict) else {}
+    foreground = scene.get("foreground") if isinstance(scene.get("foreground"), dict) else {}
     ducking = scene.get("ducking") if isinstance(scene.get("ducking"), dict) else {}
     finish = scene.get("finish") if isinstance(scene.get("finish"), dict) else {}
 
@@ -560,14 +561,16 @@ def normalize_audio_scene(raw: Any) -> Dict[str, Any]:
         loop = loop_raw
     else:
         loop = _text(loop_raw).lower() not in {"0", "false", "no", "off", "disabled"}
-    return {
+    normalized: Dict[str, Any] = {
         "background": {
             "url": background_url,
             "loop": bool(loop),
             "volume_percent": _clamped_int(background.get("volume_percent", scene.get("background_volume_percent")), 60),
         },
         "ducking": {
-            "target_percent": _clamped_int(ducking.get("target_percent", scene.get("ducking_target_percent")), 35),
+            # Up to 300 so the music can be boosted above its normal level while
+            # speaking; cores that cap at 100 simply clamp the value.
+            "target_percent": _clamped_int(ducking.get("target_percent", scene.get("ducking_target_percent")), 35, 0, 300),
             "attack_ms": _clamped_int(ducking.get("attack_ms", scene.get("ducking_attack_ms")), 150, 0, 10000),
             "release_ms": _clamped_int(ducking.get("release_ms", scene.get("ducking_release_ms")), 350, 0, 10000),
         },
@@ -575,6 +578,12 @@ def normalize_audio_scene(raw: Any) -> Dict[str, Any]:
             "fade_ms": _clamped_int(finish.get("fade_ms", scene.get("fade_ms")), 500, 0, 10000),
         },
     }
+    # TTS start delay (music lead-in before ducking). Honored by Tater v1.2.5+
+    # (server renders the scene with the delay); ignored by older cores.
+    start_delay_ms = _clamped_int(foreground.get("start_delay_ms", scene.get("tts_start_delay_ms")), 0, 0, 30000)
+    if start_delay_ms > 0:
+        normalized["foreground"] = {"start_delay_ms": start_delay_ms}
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -1121,6 +1130,22 @@ def _briefing_group_fields(item: Dict[str, Any], prefix: str, *, include_remove:
                 value=int(_to_int(((delivery.get("background_audio") or {}).get("background") or {}).get("volume_percent"), 60, 0, 100)),
                 show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
             ),
+            _field(
+                f"{prefix}BACKGROUND_START_DELAY",
+                label="TTS start delay (ms)",
+                type="number",
+                value=int(_to_int(((delivery.get("background_audio") or {}).get("foreground") or {}).get("start_delay_ms"), 0, 0, 30000)),
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+                description="How long the background audio plays at full volume before the spoken briefing starts and ducks it in. 0 starts the voice immediately. Requires Tater v1.2.5 or later; on older Tater the voice starts right away.",
+            ),
+            _field(
+                f"{prefix}BACKGROUND_DUCK",
+                label="Music volume while speaking (percent)",
+                type="number",
+                value=int(_to_int(((delivery.get("background_audio") or {}).get("ducking") or {}).get("target_percent"), 35, 0, 300)),
+                show_when={"key": f"{prefix}DELIVERY", "values": ["announce"]},
+                description="How loud the background audio stays while the voice is speaking, as a percentage of the background volume. 35 is the default; 100 keeps it unducked. Values above 100 boost the music above its normal level (needs a Tater core with the extended volume range; standard cores cap at 100).",
+            ),
         ]
     )
     return group
@@ -1240,10 +1265,20 @@ def _apply_briefing_form(item: Dict[str, Any], values: Dict[str, Any], prefix: s
                     delivery.pop("ack_llm", None)
             upload = values.get(f"{prefix}BACKGROUND_UPLOAD") if f"{prefix}BACKGROUND_UPLOAD" in values else None
             upload_url = _store_background_audio_upload(upload) if upload not in (None, "") else ""
-            if f"{prefix}BACKGROUND_URL" in values or upload_url:
-                background_url = upload_url or _text(val("BACKGROUND_URL"))
+            if (
+                f"{prefix}BACKGROUND_URL" in values
+                or upload_url
+                or f"{prefix}BACKGROUND_START_DELAY" in values
+                or f"{prefix}BACKGROUND_DUCK" in values
+            ):
                 existing = delivery.get("background_audio") if isinstance(delivery.get("background_audio"), dict) else {}
-                if background_url:
+                existing_url = _text((existing.get("background") or {}).get("url") or existing.get("background_url"))
+                background_url = upload_url or (
+                    _text(val("BACKGROUND_URL")) if f"{prefix}BACKGROUND_URL" in values else existing_url
+                )
+                if not background_url:
+                    delivery.pop("background_audio", None)
+                else:
                     background = dict(existing.get("background") or {})
                     background["url"] = background_url
                     if f"{prefix}BACKGROUND_LOOP" in values:
@@ -1252,9 +1287,26 @@ def _apply_briefing_form(item: Dict[str, Any], values: Dict[str, Any], prefix: s
                         background["volume_percent"] = _to_int(
                             val("BACKGROUND_VOLUME"), _to_int(background.get("volume_percent"), 60, 0, 100), 0, 100
                         )
-                    delivery["background_audio"] = {**existing, "background": background}
-                else:
-                    delivery.pop("background_audio", None)
+                    scene = {**existing, "background": background}
+                    if f"{prefix}BACKGROUND_START_DELAY" in values:
+                        foreground = dict(existing.get("foreground") or {})
+                        foreground["start_delay_ms"] = _to_int(
+                            val("BACKGROUND_START_DELAY"),
+                            _to_int(foreground.get("start_delay_ms"), 0, 0, 30000),
+                            0,
+                            30000,
+                        )
+                        scene["foreground"] = foreground
+                    if f"{prefix}BACKGROUND_DUCK" in values:
+                        ducking = dict(existing.get("ducking") or {})
+                        ducking["target_percent"] = _to_int(
+                            val("BACKGROUND_DUCK"),
+                            _to_int(ducking.get("target_percent"), 35, 0, 300),
+                            0,
+                            300,
+                        )
+                        scene["ducking"] = ducking
+                    delivery["background_audio"] = scene
         out["delivery"] = delivery
     return out
 
@@ -1722,7 +1774,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.4.5"
+    version = "0.5.0"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
