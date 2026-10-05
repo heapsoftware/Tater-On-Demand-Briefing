@@ -4,6 +4,10 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.5.1 — 2026-10-05
+
+- **Fixes** — Morning briefing requests can fail intermittently because the Tater planner (Astraeus) occasionally classifies them as chat instead of a tool call, so the assistant replies "one moment" and nothing runs. The planner-facing tool description now leads with an imperative and the exact phrases people actually say ("morning briefing", "give my morning briefing", "give me my morning briefing") so they stay inside the 80-character catalog row the planner sees; `routing_keywords` gains the same phrases. No behavioral change for already-routed briefings.
+
 ## v0.5.0 — 2026-10-01
 
 - **Features** — New per-briefing "TTS start delay (ms)" setting for announce-mode briefings: the background audio now plays at full volume for that many milliseconds before the spoken briefing starts and ducks it in (the "music lead-in"). Stored as `delivery.background_audio.foreground.start_delay_ms`, clamped to 0–30000, default 0 (current behavior). Honored by Tater v1.2.5+, which renders the whole scene server-side; on older Tater the key is ignored and the voice starts immediately.
