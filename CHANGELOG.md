@@ -4,6 +4,10 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.5.2 — 2026-10-11
+
+- **Fixes** — The "Include next-day forecast" weather option only spoke today's high and low temperatures; the API data already carried each day's condition but the briefing never read it. Today's and tomorrow's forecast are now spoken with conditions ("Today's forecast is partly cloudy with a high around 80 and a low around 58 degrees." / "Tomorrow's forecast is rain showers ...") when the option is checked. A day condition identical to the current weather is not repeated for today; missing conditions fall back to temperatures only.
+
 ## v0.5.1 — 2026-10-05
 
 - **Fixes** — Morning briefing requests can fail intermittently because the Tater planner (Astraeus) occasionally classifies them as chat instead of a tool call, so the assistant replies "one moment" and nothing runs. The planner-facing tool description now leads with an imperative and the exact phrases people actually say ("morning briefing", "give my morning briefing", "give me my morning briefing") so they stay inside the 80-character catalog row the planner sees; `routing_keywords` gains the same phrases. No behavioral change for already-routed briefings.

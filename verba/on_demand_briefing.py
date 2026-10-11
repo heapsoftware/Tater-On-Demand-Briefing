@@ -7,7 +7,9 @@ from settings without code changes.
 
 Built-in sections (pluggable providers):
   - time: current local date and time.
-  - weather: current real-time conditions via the WeatherAPI integration.
+  - weather: current real-time conditions via the WeatherAPI integration, plus
+    today's and tomorrow's conditions and high/low temps when the forecast
+    option is enabled.
   - news: configurable-topic news via Tater's web search, summarized for speech.
   - camera_activity: UniFi Protect smart-detection events in the window.
   - presence: BLE away window ("while I was gone") from native presence history.
@@ -1013,6 +1015,7 @@ def _briefing_group_fields(item: Dict[str, Any], prefix: str, *, include_remove:
                 label="Include next-day forecast",
                 type="checkbox",
                 value=_to_bool(weather.get("include_forecast"), False),
+                description="Adds today's and tomorrow's conditions (sunny, cloudy, rain) plus high and low temps.",
             ),
             _field(
                 f"{prefix}NEWS_TOPIC",
@@ -1429,16 +1432,47 @@ async def weather_section(briefing: Dict[str, Any], window: Dict[str, Any], runt
         parts.append(f"Humidity {_text(current.get('humidity'))} percent.")
 
     if include_forecast:
-        forecast_days = (data.get("forecast") or {}).get("forecastday") or []
-        today = next((d for d in forecast_days if _text(d.get("date")) == now_date_str()), None)
+        forecast_days = [d for d in ((data.get("forecast") or {}).get("forecastday") or []) if isinstance(d, dict)]
+        today_date = now_date_str()
+        today = next((d for d in forecast_days if _text(d.get("date")) == today_date), None)
+        tomorrow = next((d for d in forecast_days if _text(d.get("date")) != today_date), None)
+
+        def _day_temps(day: Dict[str, Any]):
+            if units == "metric":
+                return day.get("maxtemp_c"), day.get("mintemp_c")
+            return day.get("maxtemp_f"), day.get("mintemp_f")
+
+        def _day_condition(entry: Dict[str, Any]) -> str:
+            return _text(((entry.get("day") or {}).get("condition") or {}).get("text"))
+
+        def _temps_part(high, low) -> str:
+            return (
+                f"with a high around {_text(high)} and a low around {_text(low)} degrees"
+                if high is not None and low is not None
+                else ""
+            )
+
         if isinstance(today, dict):
             day = today.get("day") or {}
-            if units == "metric":
-                high, low = day.get("maxtemp_c"), day.get("mintemp_c")
-            else:
-                high, low = day.get("maxtemp_f"), day.get("mintemp_f")
-            if high is not None and low is not None:
+            high, low = _day_temps(day)
+            cond = _day_condition(today)
+            temps = _temps_part(high, low)
+            # Skip repeating the condition when it matches the current one already spoken.
+            if cond and cond.casefold() != condition.casefold():
+                parts.append(f"Today's forecast is {cond} {temps}." if temps else f"Today's forecast is {cond}.")
+            elif temps:
                 parts.append(f"Today's high is around {_text(high)} and the low around {_text(low)} degrees.")
+        if isinstance(tomorrow, dict):
+            day = tomorrow.get("day") or {}
+            high, low = _day_temps(day)
+            cond = _day_condition(tomorrow)
+            temps = _temps_part(high, low)
+            if cond and temps:
+                parts.append(f"Tomorrow's forecast is {cond} {temps}.")
+            elif temps:
+                parts.append(f"Tomorrow's high is around {_text(high)} and the low around {_text(low)} degrees.")
+            elif cond:
+                parts.append(f"Tomorrow's forecast is {cond}.")
 
     return {
         "ok": True,
@@ -1774,7 +1808,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.5.1"
+    version = "0.5.2"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
