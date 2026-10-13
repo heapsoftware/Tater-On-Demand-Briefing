@@ -4,6 +4,10 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.5.3 — 2026-10-13
+
+- **Fixes** — Briefing requests can miss their tool call when the request starts with a wake word or a misheard assistant name ("Charvis, give my morning briefing") — the planner classifies the turn as chat and nothing runs. The planner-facing tool description now leads with "any spoken briefing request" and the phrasings actually said ("play/do/run/give my morning briefing") inside the 80-character catalog row it sees, and adds a clause telling the planner the briefing request is the intent even when the request opens with a wake word or a misheard assistant name; `routing_keywords` gains the same variants. Known limitation: when the briefing does route, the spoken ack can still gain extra words (greeting, clock time, a clarifying question) — that is the Tater core's final-answer render discarding the verba's `say_hint` and needs a core-side fix (`hydra/__init__.py` `_run_hermes_final_render` receives `instruction=""`; `hydra/hydra_execution.py` strips `say_hint`).
+
 ## v0.5.2 — 2026-10-11
 
 - **Fixes** — The "Include next-day forecast" weather option only spoke today's high and low temperatures; the API data already carried each day's condition but the briefing never read it. Today's and tomorrow's forecast are now spoken with conditions ("Today's forecast is partly cloudy with a high around 80 and a low around 58 degrees." / "Tomorrow's forecast is rain showers ...") when the option is checked. A day condition identical to the current weather is not repeated for today; missing conditions fall back to temperatures only.

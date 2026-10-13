@@ -1808,7 +1808,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.5.2"
+    version = "0.5.3"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
@@ -1824,9 +1824,12 @@ class OnDemandBriefingPlugin(ToolVerba):
     )
     verba_dec = "Spoken briefings on demand with configurable sections: time, weather, news, camera activity, and BLE presence."
     when_to_use = (
-        "Call this tool for: 'morning briefing', 'give my morning briefing', 'give me my morning briefing', "
-        "'daily briefing', 'security briefing', 'news briefing', 'welcome home briefing', 'rundown of the day', "
-        "'what did I miss', 'what happened while I was gone or out', or any configured briefing name. "
+        "Call this tool for any spoken briefing request: 'play my morning briefing', "
+        "'give me my morning briefing', 'do my morning briefing', 'morning briefing', "
+        "'daily briefing', 'security briefing', 'news briefing', 'welcome home briefing', "
+        "'what did I miss', 'what happened while I was gone or out', 'rundown of the day', "
+        "or any configured briefing name. Call it even when the request opens with a wake "
+        "word or a misheard assistant name; the briefing request itself is the intent. "
         "Runs the briefing's sections and speaks the result. Not for simple weather or clock questions."
     )
     how_to_use = (
@@ -1857,6 +1860,10 @@ class OnDemandBriefingPlugin(ToolVerba):
     routing_keywords = [
         "briefing",
         "morning briefing",
+        "my morning briefing",
+        "play my morning briefing",
+        "do my morning briefing",
+        "run my morning briefing",
         "give my morning briefing",
         "give me my morning briefing",
         "give me my briefing",
