@@ -4,6 +4,10 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.6.1 — 2026-10-30
+
+- **Changes** — The spoken-format rules added in v0.6.0 (times as words, ordinal dates, spoken temperatures) are no longer baked into the briefing prompt; the configured Tater personality is the sole style source, and its prompt block now explicitly says to follow the personality's own spoken-format rules. Installs with a personality that carries those rules (e.g. "write 'seven fifteen a.m.'") are unaffected; installs with no personality, or one without such rules, may get digits again for times/temperatures — the deterministic no-LLM fallback still spells clock times out. A direct "what time is it?" and the briefing therefore share one source of truth: the personality.
+
 ## v0.6.0 — 2026-10-30
 
 - **Fixes** — Briefings were written in the verba's generic voice instead of the assistant's configured personality ("You are JARVIS…"), so stated times, dates and temperatures ignored the personality's spoken-style rules (a direct "what time is it?" said "six oh seven a.m." but the briefing said "6:07", and TTS read "six zero seven"). The briefing writer now receives the configured Tater personality and must write clock times as spoken words ("six oh seven a.m."), dates with ordinal day words ("October thirtieth"), and temperatures as spoken words ("seventy five point three degrees"). The deterministic section text matches too: the time section, camera event times and presence windows are now spelled out, so even the no-LLM fallback is in style.
