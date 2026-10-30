@@ -4,7 +4,7 @@
     {
       "id": "on_demand_briefing",
       "name": "On Demand Briefing",
-      "version": "0.5.3",
+      "version": "0.6.0",
       "min_tater_version": "99",
       "description": "Spoken briefings on demand with configurable sections: time, weather, news, UniFi Protect camera activity, and BLE presence. Includes Morning and Welcome Home briefings, configurable briefing definitions, and optional background audio with ducked TTS announcements.",
       "portals": [
@@ -26,7 +26,7 @@
         "unifi protect"
       ],
       "entry": "verba/on_demand_briefing.py",
-      "sha256": "0e99bbc5cf5cffbcc5d4c1f0f838d40c2a25f06f2174d150a47aed6b5b83cf08"
+      "sha256": "b2be104b85cc12dc2103788337eb91b4bc9bfdff3d115600081daae92ddf560e"
     }
   ]
 }

@@ -376,10 +376,50 @@ def natural_duration(seconds: Optional[float]) -> str:
     return f"{minutes} minute{'s' if minutes != 1 else ''}"
 
 
+_ONES_WORDS = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen",
+]
+_MINUTE_WORDS = {index: word for index, word in enumerate(_ONES_WORDS)}
+for _tens, _tens_word in ((20, "twenty"), (30, "thirty"), (40, "forty"), (50, "fifty")):
+    _MINUTE_WORDS[_tens] = _tens_word
+    for _one in range(1, 10):
+        _MINUTE_WORDS[_tens + _one] = f"{_tens_word} {_ONES_WORDS[_one]}"
+
+_ORDINAL_DAY_WORDS = {
+    1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth",
+    7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth", 11: "eleventh",
+    12: "twelfth", 13: "thirteenth", 14: "fourteenth", 15: "fifteenth",
+    16: "sixteenth", 17: "seventeenth", 18: "eighteenth", 19: "nineteenth",
+    20: "twentieth", 21: "twenty first", 22: "twenty second", 23: "twenty third",
+    24: "twenty fourth", 25: "twenty fifth", 26: "twenty sixth",
+    27: "twenty seventh", 28: "twenty eighth", 29: "twenty ninth",
+    30: "thirtieth", 31: "thirty first",
+}
+
+
+def spoken_time_words(moment: datetime) -> str:
+    """Clock time as written-out spoken English in the Tater personality's
+    meridiem style: 'six oh seven a.m.', 'seven fifteen p.m.', 'six p.m.'."""
+    hour12 = moment.hour % 12 or 12
+    meridiem = "a.m." if moment.hour < 12 else "p.m."
+    if moment.minute == 0:
+        return f"{_ONES_WORDS[hour12]} {meridiem}"
+    minute = _MINUTE_WORDS.get(moment.minute, str(moment.minute))
+    minute = f"oh {minute}" if moment.minute < 10 else minute
+    return f"{_ONES_WORDS[hour12]} {minute} {meridiem}"
+
+
+def spoken_ordinal_day(moment: datetime) -> str:
+    """Day of the month as an ordinal word, so TTS reads 'October thirtieth'."""
+    return _ORDINAL_DAY_WORDS.get(moment.day, str(moment.day))
+
+
 def natural_time(moment: Optional[datetime]) -> str:
-    if moment is None:
+    if moment is None or not hasattr(moment, "strftime"):
         return "unknown time"
-    return moment.strftime("%-I:%M %p").lstrip("0").lower() if hasattr(moment, "strftime") else "unknown time"
+    return spoken_time_words(moment)
 
 
 def spoken_flatten(text: Any, max_chars: int = 1600) -> str:
@@ -489,6 +529,18 @@ def _person_instructions_from_context(context: Any) -> str:
         if instructions:
             return " ".join(instructions.split())[:400]
     return ""
+
+
+def _core_personality(limit: int = 4000) -> str:
+    """The assistant personality / style configured in Tater (the same text the
+    core puts into its own prompts), so the briefing is written in the same
+    voice instead of the verba's generic one. Empty when unavailable."""
+    try:
+        from helpers import get_tater_personality
+
+        return " ".join(_text(get_tater_personality()).split())[:limit]
+    except Exception:
+        return ""
 
 
 def _requesting_satellite_selector(context: Any) -> str:
@@ -1489,9 +1541,7 @@ def now_date_str() -> str:
 @section_provider("time")
 async def time_section(briefing: Dict[str, Any], window: Dict[str, Any], runtime: Dict[str, Any]) -> Dict[str, Any]:
     now = _local_now()
-    hour = now.hour % 12 or 12
-    spoken = f"{hour}:{now.minute:02d} {'am' if now.hour < 12 else 'pm'}"
-    summary = f"It is {spoken} on {now.strftime('%A, %B ') + str(now.day)}."
+    summary = f"It is {spoken_time_words(now)} on {now.strftime('%A, %B ')}{spoken_ordinal_day(now)}."
     return {"ok": True, "summary": summary, "data": {"iso": now.isoformat()}, "error": ""}
 
 
@@ -1538,6 +1588,7 @@ async def news_section(briefing: Dict[str, Any], window: Dict[str, Any], runtime
         "You write the news portion of a spoken briefing. Using ONLY the provided search results, "
         f"write at most {max_items} short news items. Each item is at most {max_sentences} sentence(s). "
         "No markdown, no lists, no URLs, no source names. Merge duplicate stories. "
+        "Write any clock times as natural spoken English ('six oh seven a.m.'). "
         "If the results are thin, summarize what is there. Output plain sentences only."
     )
     user_payload = json.dumps({"topic": topic, "results": compact}, ensure_ascii=False)
@@ -1768,7 +1819,7 @@ async def camera_activity_section(briefing: Dict[str, Any], window: Dict[str, An
             {
                 "camera": camera_name,
                 "types": smart,
-                "at": moment.strftime("%-I:%M %p").lstrip("0").lower(),
+                "at": spoken_time_words(moment),
                 "iso": moment.isoformat(),
             }
         )
@@ -1808,7 +1859,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.5.3"
+    version = "0.6.0"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
@@ -2173,16 +2224,27 @@ class OnDemandBriefingPlugin(ToolVerba):
 
         person_instructions = _person_instructions_from_context(context)
         address_line = (
-            "- Address the user per these trusted person instructions from Settings > People: "
+            "- Follow these trusted person instructions from Settings > People for how to address the user: "
             f"{person_instructions}\n"
             if person_instructions
+            else ""
+        )
+        personality = _core_personality()
+        voice_block = (
+            "Assistant personality (write this briefing in this voice, without mentioning it):\n"
+            f"{personality}\n"
+            if personality
             else ""
         )
         system = (
             "You write short spoken briefings for Tater. Follow the briefing instructions.\n"
             "Rules:\n"
-            "- Spoken-friendly: short sentences, natural times ('around ten past ten'), no markdown, no lists, no URLs.\n"
-            "- Use ONLY the provided section data. Never fabricate events, names, numbers, or times.\n"
+            "- Spoken-friendly: short sentences, no markdown, no lists, no URLs.\n"
+            f"{voice_block}"
+            "- Write every clock time as natural spoken English in the style 'six oh seven a.m.' or "
+            "'seven fifteen p.m.' — never digits like 6:07 and never 'zero' for the oh-minute.\n"
+            "- Write dates with the day of the month as an ordinal word ('October thirtieth', 'October fifth').\n"
+            "- Write temperatures as natural spoken words ('seventy five point three degrees').\n"
             f"{address_line}"
             "- If a section reported an error, briefly mention that piece was unavailable; still deliver the rest.\n"
             f"- Style: {style}.\n"

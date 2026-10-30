@@ -4,6 +4,11 @@ Short summary of what changed in each release. Versions follow
 `MAJOR.MINOR.REVISION` (starting at 0.1.0); each version is tagged `vX.Y.Z`
 and posted as a GitHub release with these notes.
 
+## v0.6.0 — 2026-10-30
+
+- **Fixes** — Briefings were written in the verba's generic voice instead of the assistant's configured personality ("You are JARVIS…"), so stated times, dates and temperatures ignored the personality's spoken-style rules (a direct "what time is it?" said "six oh seven a.m." but the briefing said "6:07", and TTS read "six zero seven"). The briefing writer now receives the configured Tater personality and must write clock times as spoken words ("six oh seven a.m."), dates with ordinal day words ("October thirtieth"), and temperatures as spoken words ("seventy five point three degrees"). The deterministic section text matches too: the time section, camera event times and presence windows are now spelled out, so even the no-LLM fallback is in style.
+- **Behavior** — The briefing also still follows the identified person's trusted response instructions from Settings > People (already present since v0.3.0; kept, with the instruction line reworded to cover all person response instructions).
+
 ## v0.5.3 — 2026-10-13
 
 - **Fixes** — Briefing requests can miss their tool call when the request starts with a wake word or a misheard assistant name ("Charvis, give my morning briefing") — the planner classifies the turn as chat and nothing runs. The planner-facing tool description now leads with "any spoken briefing request" and the phrasings actually said ("play/do/run/give my morning briefing") inside the 80-character catalog row it sees, and adds a clause telling the planner the briefing request is the intent even when the request opens with a wake word or a misheard assistant name; `routing_keywords` gains the same variants. Known limitation: when the briefing does route, the spoken ack can still gain extra words (greeting, clock time, a clarifying question) — that is the Tater core's final-answer render discarding the verba's `say_hint` and needs a core-side fix (`hydra/__init__.py` `_run_hermes_final_render` receives `instruction=""`; `hydra/hydra_execution.py` strips `say_hint`).
