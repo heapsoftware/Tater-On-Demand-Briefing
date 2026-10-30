@@ -1588,7 +1588,6 @@ async def news_section(briefing: Dict[str, Any], window: Dict[str, Any], runtime
         "You write the news portion of a spoken briefing. Using ONLY the provided search results, "
         f"write at most {max_items} short news items. Each item is at most {max_sentences} sentence(s). "
         "No markdown, no lists, no URLs, no source names. Merge duplicate stories. "
-        "Write any clock times as natural spoken English ('six oh seven a.m.'). "
         "If the results are thin, summarize what is there. Output plain sentences only."
     )
     user_payload = json.dumps({"topic": topic, "results": compact}, ensure_ascii=False)
@@ -1859,7 +1858,7 @@ class OnDemandBriefingPlugin(ToolVerba):
     name = "on_demand_briefing"
     verba_name = "On Demand Briefing"
     pretty_name = "On Demand Briefing"
-    version = "0.6.0"
+    version = "0.6.1"
     min_tater_version = "99"
     settings_category = SETTINGS_CATEGORY
 
@@ -2231,7 +2230,8 @@ class OnDemandBriefingPlugin(ToolVerba):
         )
         personality = _core_personality()
         voice_block = (
-            "Assistant personality (write this briefing in this voice, without mentioning it):\n"
+            "Assistant personality (write this briefing in this voice, and follow its "
+            "spoken-format rules for times, dates, and temperatures):\n"
             f"{personality}\n"
             if personality
             else ""
@@ -2241,10 +2241,7 @@ class OnDemandBriefingPlugin(ToolVerba):
             "Rules:\n"
             "- Spoken-friendly: short sentences, no markdown, no lists, no URLs.\n"
             f"{voice_block}"
-            "- Write every clock time as natural spoken English in the style 'six oh seven a.m.' or "
-            "'seven fifteen p.m.' — never digits like 6:07 and never 'zero' for the oh-minute.\n"
-            "- Write dates with the day of the month as an ordinal word ('October thirtieth', 'October fifth').\n"
-            "- Write temperatures as natural spoken words ('seventy five point three degrees').\n"
+            "- Use ONLY the provided section data. Never fabricate events, names, numbers, or times.\n"
             f"{address_line}"
             "- If a section reported an error, briefly mention that piece was unavailable; still deliver the rest.\n"
             f"- Style: {style}.\n"
